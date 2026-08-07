@@ -1,0 +1,6 @@
+{
+  "name": "Consolidador de Esteiras Excel",
+  "description": "Sistema para ler, mapear e consolidar abas (esteiras) de arquivos Excel em uma base de dados unificada com exportação e relatórios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
