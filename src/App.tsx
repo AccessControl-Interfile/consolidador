@@ -14,7 +14,7 @@ import { ColumnMapper } from './components/ColumnMapper';
 import { MainDatabaseGrid } from './components/MainDatabaseGrid';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { LoginScreen } from './components/LoginScreen';
-import { CheckCircle2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, RefreshCw, ArrowLeft } from 'lucide-react';
 import { purgeLocalStorage, saveToFirebase, loadFromFirebase, deleteFromFirebase } from './lib/firebase';
 import { supabase } from './lib/supabase';
 
@@ -23,6 +23,7 @@ export default function App() {
   // Navigation Step: 1 = Upload, 2 = Selecionar Esteiras, 3 = Mapear/Excluir Colunas, 4 = Base Consolidada
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>('Processando dados...');
   const [fileName, setFileName] = useState<string>('Tabulador_Esteiras.xlsx');
 
   // Core Data State
@@ -95,34 +96,38 @@ export default function App() {
 
   const handleFileUpload = (file: File) => {
     setIsLoading(true);
+    setLoadingMessage('Lendo e analisando a planilha Excel...');
     setFileName(file.name);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const buffer = e.target?.result as ArrayBuffer;
-        const parsedSheets = parseExcelFile(buffer, file.name);
+    setTimeout(() => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const buffer = e.target?.result as ArrayBuffer;
+          const parsedSheets = parseExcelFile(buffer, file.name);
 
-        if (parsedSheets.length === 0) {
-          alert('Nenhuma aba válida com dados foi encontrada no arquivo.');
+          if (parsedSheets.length === 0) {
+            alert('Nenhuma aba válida com dados foi encontrada no arquivo.');
+            setIsLoading(false);
+            return;
+          }
+
+          setSheets(parsedSheets);
+          setCurrentStep(2);
+        } catch (err) {
+          console.error(err);
+          alert('Erro ao ler a planilha Excel. Verifique se o arquivo não está corrompido.');
+        } finally {
           setIsLoading(false);
-          return;
         }
-
-        setSheets(parsedSheets);
-        setCurrentStep(2);
-      } catch (err) {
-        console.error(err);
-        alert('Erro ao ler a planilha Excel. Verifique se o arquivo não está corrompido.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    reader.readAsArrayBuffer(file);
+      };
+      reader.readAsArrayBuffer(file);
+    }, 100);
   };
 
   const handleLoadDemo = () => {
     setIsLoading(true);
+    setLoadingMessage('Gerando base demonstrativa...');
     setFileName('Tabulador_Demonstrativo_Esteiras.xlsx');
 
     setTimeout(() => {
@@ -130,7 +135,7 @@ export default function App() {
       setSheets(demoSheets);
       setCurrentStep(2);
       setIsLoading(false);
-    }, 400);
+    }, 300);
   };
 
   const handleDownloadDemoTemplate = () => {
@@ -161,20 +166,36 @@ export default function App() {
       return;
     }
 
-    // Standard Power Query mode (exact header union)
-    const mappings = generateSmartColumnMappings(sheets, false);
-    setColumnMappings(mappings);
-    setCurrentStep(3);
+    setIsLoading(true);
+    setLoadingMessage('Mapeando colunas e analisando cabeçalhos das esteiras...');
+
+    setTimeout(() => {
+      // Standard Power Query mode (exact header union)
+      const mappings = generateSmartColumnMappings(sheets, false);
+      setColumnMappings(mappings);
+      setCurrentStep(3);
+      setIsLoading(false);
+    }, 150);
   };
 
   const handleResetToPowerQuery = () => {
-    const mappings = generateSmartColumnMappings(sheets, false);
-    setColumnMappings(mappings);
+    setIsLoading(true);
+    setLoadingMessage('Resetando unificação de colunas para o padrão...');
+    setTimeout(() => {
+      const mappings = generateSmartColumnMappings(sheets, false);
+      setColumnMappings(mappings);
+      setIsLoading(false);
+    }, 150);
   };
 
   const handleApplySynonymGrouping = () => {
-    const mappings = generateSmartColumnMappings(sheets, true);
-    setColumnMappings(mappings);
+    setIsLoading(true);
+    setLoadingMessage('Buscando e agrupando sinônimos automáticos...');
+    setTimeout(() => {
+      const mappings = generateSmartColumnMappings(sheets, true);
+      setColumnMappings(mappings);
+      setIsLoading(false);
+    }, 150);
   };
 
   // Step 3 -> Step 4: Execute Consolidation directly (No Step 4 cleaning)
@@ -186,6 +207,7 @@ export default function App() {
     }
 
     setIsLoading(true);
+    setLoadingMessage('Consolidando e padronizando todas as esteiras de dados...');
 
     setTimeout(() => {
       try {
@@ -208,6 +230,15 @@ export default function App() {
         setIsLoading(false);
       }
     }, 300);
+  };
+
+  const handleBackToStep3 = () => {
+    setIsLoading(true);
+    setLoadingMessage('Retornando à Etapa 3 de Mapeamento...');
+    setTimeout(() => {
+      setCurrentStep(3);
+      setIsLoading(false);
+    }, 150);
   };
 
   // Grid mutations in Step 4
@@ -340,6 +371,15 @@ export default function App() {
 
               <div className="flex items-center gap-3 shrink-0">
                 <button
+                  onClick={handleBackToStep3}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl border border-emerald-500 flex items-center gap-1.5 transition-colors shadow-md"
+                  title="Voltar para a Etapa 3 de Mapeamento para reconfigurar colunas e reprocessar a base"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Voltar para Mapeamento (Etapa 3)</span>
+                </button>
+
+                <button
                   onClick={handleResetAll}
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors"
                 >
@@ -358,6 +398,7 @@ export default function App() {
               onAddRecord={handleAddRecord}
               onBulkUpdateRecords={setConsolidatedRecords}
               onResetAll={handleResetAll}
+              onBackToStep3={handleBackToStep3}
             />
 
           </div>
@@ -374,6 +415,22 @@ export default function App() {
           onClearAll={handleClearAllHistory}
           onClose={() => setShowHistoryDrawer(false)}
         />
+      )}
+
+      {/* Global Processing Loading Overlay */}
+      {isLoading && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center p-4 transition-all">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 max-w-sm w-full flex flex-col items-center text-center space-y-4 border border-slate-100 animate-in fade-in zoom-in-95 duration-200">
+            <div className="relative flex items-center justify-center">
+              <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin" />
+              <RefreshCw className="w-6 h-6 text-emerald-600 absolute animate-pulse" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 text-base sm:text-lg">{loadingMessage || 'Processando dados...'}</h3>
+              <p className="text-xs text-slate-500 mt-1">Aguarde alguns instantes enquanto o sistema conclui o processamento.</p>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

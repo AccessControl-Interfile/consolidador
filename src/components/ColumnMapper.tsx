@@ -448,6 +448,7 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
                     <option value="number">Número (Inteiro/Decimal)</option>
                     <option value="currency">Moeda (R$)</option>
                     <option value="date">Data (DD/MM/AAAA)</option>
+                    <option value="time">Hora (HH:MM:SS)</option>
                     <option value="status">Status / Categoria</option>
                   </select>
                 </div>

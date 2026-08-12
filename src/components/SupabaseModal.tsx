@@ -73,6 +73,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const [columnMappings, setColumnMappings] = useState<SupabaseColumnMapping[]>([]);
+  const [clearExistingData, setClearExistingData] = useState<boolean>(false);
 
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
@@ -213,6 +214,18 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     setUploadSuccess(false);
 
     try {
+      if (clearExistingData) {
+        setUploadStatus(`Excluindo dados existentes da tabela "${activeTableName}"...`);
+        const targetCol = validMappings[0].supabaseColumn;
+
+        const { error: delErr1 } = await supabase.from(activeTableName).delete().not(targetCol, 'is', null);
+        const { error: delErr2 } = await supabase.from(activeTableName).delete().is(targetCol, null);
+
+        if (delErr1 && delErr2) {
+          throw new Error(`Erro ao excluir dados antigos da tabela "${activeTableName}": ${delErr1.message || delErr2.message}`);
+        }
+      }
+
       const payloads = recordsToUpload.map(rec => {
         const row: Record<string, any> = {};
         validMappings.forEach(map => {
@@ -344,6 +357,19 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
                     className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 font-mono"
                   />
                 )}
+              </div>
+
+              {/* Checkbox for clearing existing table data */}
+              <div className="pt-2 border-t border-slate-200">
+                <label className="flex items-center gap-2.5 text-xs text-slate-700 font-semibold cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={clearExistingData}
+                    onChange={(e) => setClearExistingData(e.target.checked)}
+                    className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <span>Excluir os dados atuais desta tabela antes de enviar os novos registros (Sobrescrever)</span>
+                </label>
               </div>
             </div>
 

@@ -148,6 +148,55 @@ export function formatDateValue(val: any): string {
   return str;
 }
 
+export function formatTimeValue(val: any): string {
+  if (val === null || val === undefined || val === '') return '';
+
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return '';
+    const hh = String(val.getHours()).padStart(2, '0');
+    const mm = String(val.getMinutes()).padStart(2, '0');
+    const ss = String(val.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  const str = String(val).trim();
+  if (!str) return '';
+
+  // Check Excel time fraction or serial e.g. 0.5 or 44927.5
+  const numVal = Number(str);
+  if (!isNaN(numVal) && numVal >= 0 && numVal < 100000) {
+    const fraction = numVal % 1;
+    if (fraction > 0) {
+      let totalSecs = Math.round(fraction * 86400);
+      let hh = Math.floor(totalSecs / 3600) % 24;
+      let mm = Math.floor((totalSecs % 3600) / 60);
+      let ss = totalSecs % 60;
+      return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+    }
+  }
+
+  // Check HH:MM:SS or HH:MM or HH:MM:SS.mmm
+  const timeMatch = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (timeMatch) {
+    const [, h, m, s] = timeMatch;
+    const hh = String(parseInt(h, 10)).padStart(2, '0');
+    const mm = String(parseInt(m, 10)).padStart(2, '0');
+    const ss = String(s ? parseInt(s, 10) : 0).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  // Try parsing JS Date string
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const hh = String(parsed.getHours()).padStart(2, '0');
+    const mm = String(parsed.getMinutes()).padStart(2, '0');
+    const ss = String(parsed.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  return str;
+}
+
 export function parseCurrencyValue(val: any): number | string {
   if (val === null || val === undefined || val === '') return '';
   if (typeof val === 'number') return val;
@@ -213,13 +262,10 @@ export function consolidateSheets(
         ? config.fillMissingValue.toUpperCase()
         : (config.fillMissingValue || '');
 
-      const esteiraColName = config.esteiraColumnName || 'Esteira / Origem';
-
       const consolidatedRow: ConsolidatedRecord = {
         __id: `rec-${recordIndex++}`,
         __esteira: esteiraName,
-        __rowNum: rowIdx + 1,
-        [esteiraColName]: esteiraName
+        __rowNum: rowIdx + 1
       };
 
       // Populate mapped target columns
@@ -242,6 +288,8 @@ export function consolidateSheets(
 
             if (mapping.dataType === 'date') {
               processedVal = formatDateValue(processedVal);
+            } else if (mapping.dataType === 'time') {
+              processedVal = formatTimeValue(processedVal);
             } else if (mapping.dataType === 'currency') {
               processedVal = parseCurrencyValue(processedVal);
             }
@@ -328,7 +376,7 @@ export function consolidateSheets(
     totalEsteiras: selectedSheets.length,
     duplicateRowsRemoved: duplicateCount,
     emptyRowsRemoved: emptyRowsCount,
-    unifiedColumnsCount: targetColNames.length + 1, // including Esteira metadata
+    unifiedColumnsCount: targetColNames.length,
     recordsPerEsteira,
     fieldCompletenessRate: completeness,
     createdAt: new Date().toLocaleDateString('pt-BR', {

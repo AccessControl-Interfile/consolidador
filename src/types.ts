@@ -1,4 +1,4 @@
-export type DataType = 'string' | 'number' | 'date' | 'currency' | 'status';
+export type DataType = 'string' | 'number' | 'date' | 'time' | 'currency' | 'status';
 
 export interface RawRow {
   [key: string]: any;
@@ -149,9 +149,11 @@ export interface GroupingPreset {
   id: string;
   name: string;
   groupColumns: string[];
+  aggregationType?: 'count' | 'sum' | 'both';
+  sumColumn?: string;
 }
 
-export type ReplaceConditionOperator = 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'anything';
+export type ReplaceConditionOperator = 'equals' | 'not_equals' | 'contains' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'anything';
 
 export interface ConditionClause {
   id: string;

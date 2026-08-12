@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ConsolidatedRecord, ConsolidationSummary, ColumnMergePreset, ColumnMergeRule, GroupingPreset, ConditionalReplaceRule, ConditionalReplacePreset, ReplaceConditionOperator, ConditionClause } from '../types';
 import {
-  Download, ArrowUpDown, ChevronLeft, ChevronRight,
+  Download, ArrowUpDown, ChevronLeft, ChevronRight, ArrowLeft,
   Eye, Edit3, Trash2, Plus, FileSpreadsheet, Check, X,
-  SlidersHorizontal, Layers, Merge, Save, BookmarkPlus, Edit, FolderOpen, RotateCcw, Replace, Database, UploadCloud, Filter, Search
+  SlidersHorizontal, Layers, Merge, Save, BookmarkPlus, Edit, FolderOpen, RotateCcw, Replace, Database, UploadCloud, Filter, Search, RefreshCw
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exporter';
 import { SupabaseModal } from './SupabaseModal';
@@ -17,6 +17,7 @@ interface MainDatabaseGridProps {
   onAddRecord: (newRecord: ConsolidatedRecord) => void;
   onBulkUpdateRecords: (updatedRecords: ConsolidatedRecord[]) => void;
   onResetAll: () => void;
+  onBackToStep3?: () => void;
 }
 
 const MERGE_STORAGE_KEY = 'esteiras_merge_presets';
@@ -30,7 +31,8 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   onDeleteRecord,
   onAddRecord,
   onBulkUpdateRecords,
-  onResetAll
+  onResetAll,
+  onBackToStep3
 }) => {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -74,8 +76,12 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const [groupingPresets, setGroupingPresets] = useState<GroupingPreset[]>([]);
   const [selectedGroupingPresetId, setSelectedGroupingPresetId] = useState<string>('');
   const [draftGroupColumns, setDraftGroupColumns] = useState<string[]>([]);
+  const [draftAggregationType, setDraftAggregationType] = useState<'count' | 'sum' | 'both'>('count');
+  const [draftSumColumn, setDraftSumColumn] = useState<string>('');
   const [groupingSaveName, setGroupingSaveName] = useState<string>('');
   const [activeGroupColumns, setActiveGroupColumns] = useState<string[]>([]);
+  const [activeAggregationType, setActiveAggregationType] = useState<'count' | 'sum' | 'both'>('count');
+  const [activeSumColumn, setActiveSumColumn] = useState<string>('');
   const [splitByCommaInGrouping, setSplitByCommaInGrouping] = useState<boolean>(true);
 
   // Supabase Upload Modal State
@@ -86,6 +92,11 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const [conditionalPresets, setConditionalPresets] = useState<ConditionalReplacePreset[]>([]);
   const [selectedConditionalPresetId, setSelectedConditionalPresetId] = useState<string>('');
   const [conditionalRules, setConditionalRules] = useState<ConditionalReplaceRule[]>([]);
+
+  // Processing & Exporting Loading States
+  const [isProcessingGrid, setIsProcessingGrid] = useState<boolean>(false);
+  const [gridProcessingMessage, setGridProcessingMessage] = useState<string>('Processando dados...');
+  const [isExportingExcel, setIsExportingExcel] = useState<boolean>(false);
 
   // Conditional Replace Form Draft
   const [draftTargetCol, setDraftTargetCol] = useState<string>('');
@@ -157,13 +168,26 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     });
   }, [records, columnFilters]);
 
-  // 2. Computed Grouped Records (Power Query style with optional comma splitting)
+  // 2. Computed Grouped Records (Power Query style with optional sum/count)
   const displayRecords = useMemo(() => {
     if (activeGroupColumns.length === 0) {
       return filteredBaseRecords;
     }
 
-    const groupMap = new Map<string, { comboValues: string[]; count: number }>();
+    const helperParseNum = (v: any): number => {
+      if (v === null || v === undefined || v === '') return 0;
+      if (typeof v === 'number') return isNaN(v) ? 0 : v;
+      let str = String(v).replace(/R\$/gi, '').replace(/\s/g, '').trim();
+      if (str.includes(',') && str.includes('.')) {
+        str = str.replace(/\./g, '').replace(',', '.');
+      } else if (str.includes(',')) {
+        str = str.replace(',', '.');
+      }
+      const n = parseFloat(str);
+      return isNaN(n) ? 0 : n;
+    };
+
+    const groupMap = new Map<string, { comboValues: string[]; count: number; sum: number }>();
 
     filteredBaseRecords.forEach(rec => {
       // Get array of string values for each grouped column
@@ -186,28 +210,40 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
       };
 
       const combinations = cartesian(colOptions);
+      const valToSum = activeSumColumn ? helperParseNum(rec[activeSumColumn]) : 0;
 
       combinations.forEach(combo => {
         const groupKey = combo.map(k => k.toLowerCase()).join(':::');
 
         if (!groupMap.has(groupKey)) {
-          groupMap.set(groupKey, { comboValues: combo, count: 1 });
+          groupMap.set(groupKey, { comboValues: combo, count: 1, sum: valToSum });
         } else {
-          groupMap.get(groupKey)!.count += 1;
+          const item = groupMap.get(groupKey)!;
+          item.count += 1;
+          item.sum += valToSum;
         }
       });
     });
 
     const result: ConsolidatedRecord[] = [];
     let idx = 1;
+    const sumColName = activeSumColumn ? `Soma (${activeSumColumn})` : 'Soma';
 
-    groupMap.forEach(({ comboValues, count }) => {
+    groupMap.forEach(({ comboValues, count, sum }) => {
       const groupedRec: ConsolidatedRecord = {
         __id: `grouped-${idx}`,
         __esteira: 'Visão Agrupada',
         __rowNum: idx,
-        'Quantidade': count
       };
+
+      if (activeAggregationType === 'count' || activeAggregationType === 'both') {
+        groupedRec['Quantidade'] = count;
+      }
+
+      if ((activeAggregationType === 'sum' || activeAggregationType === 'both') && activeSumColumn) {
+        const formattedSum = Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
+        groupedRec[sumColName] = formattedSum;
+      }
 
       activeGroupColumns.forEach((col, colIdx) => {
         groupedRec[col] = comboValues[colIdx] || '-';
@@ -218,15 +254,22 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     });
 
     return result;
-  }, [records, activeGroupColumns, splitByCommaInGrouping]);
+  }, [records, filteredBaseRecords, activeGroupColumns, activeAggregationType, activeSumColumn, splitByCommaInGrouping]);
 
   // Active columns to display in table
   const allColumns = useMemo(() => {
     if (activeGroupColumns.length > 0) {
-      return [...activeGroupColumns, 'Quantidade'];
+      const cols = [...activeGroupColumns];
+      if (activeAggregationType === 'count' || activeAggregationType === 'both') {
+        cols.push('Quantidade');
+      }
+      if ((activeAggregationType === 'sum' || activeAggregationType === 'both') && activeSumColumn) {
+        cols.push(`Soma (${activeSumColumn})`);
+      }
+      return cols;
     }
     return allRawColumns;
-  }, [allRawColumns, activeGroupColumns]);
+  }, [allRawColumns, activeGroupColumns, activeAggregationType, activeSumColumn]);
 
   const visibleColumns = useMemo(() => {
     return allColumns.filter(c => !hiddenColumns.has(c));
@@ -428,43 +471,49 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
       return;
     }
 
-    let updatedRecords = records.map(rec => ({ ...rec }));
+    setIsProcessingGrid(true);
+    setGridProcessingMessage('Aplicando regras de unificação na base...');
 
-    mergeRules.forEach(rule => {
-      const targetCol = rule.newColumnName;
+    setTimeout(() => {
+      let updatedRecords = records.map(rec => ({ ...rec }));
 
-      updatedRecords = updatedRecords.map(rec => {
-        const copy = { ...rec };
-        let mergedVal: any = '-';
+      mergeRules.forEach(rule => {
+        const targetCol = rule.newColumnName;
 
-        for (const col of rule.sourceColumns) {
-          const val = rec[col];
-          if (val !== undefined && val !== null && String(val).trim() !== '' && String(val).trim() !== '-') {
-            mergedVal = typeof val === 'string' ? val.toUpperCase() : val;
-            break;
-          }
-        }
+        updatedRecords = updatedRecords.map(rec => {
+          const copy = { ...rec };
+          let mergedVal: any = '-';
 
-        copy[targetCol] = mergedVal;
-
-        if (rule.removeOriginals) {
-          rule.sourceColumns.forEach(col => {
-            if (col !== targetCol) {
-              delete copy[col];
+          for (const col of rule.sourceColumns) {
+            const val = rec[col];
+            if (val !== undefined && val !== null && String(val).trim() !== '' && String(val).trim() !== '-') {
+              mergedVal = typeof val === 'string' ? val.toUpperCase() : val;
+              break;
             }
-          });
-        }
+          }
 
-        return copy;
+          copy[targetCol] = mergedVal;
+
+          if (rule.removeOriginals) {
+            rule.sourceColumns.forEach(col => {
+              if (col !== targetCol) {
+                delete copy[col];
+              }
+            });
+          }
+
+          return copy;
+        });
       });
-    });
 
-    onBulkUpdateRecords(updatedRecords);
-    setShowMergeModal(false);
-    setMergeRules([]);
-    setSelectedSourceCols([]);
-    setNewColumnName('');
-    alert(`Sucesso! Foram aplicadas ${mergeRules.length} regras de unificação na base consolidada.`);
+      onBulkUpdateRecords(updatedRecords);
+      setShowMergeModal(false);
+      setMergeRules([]);
+      setSelectedSourceCols([]);
+      setNewColumnName('');
+      setIsProcessingGrid(false);
+      alert(`Sucesso! Foram aplicadas ${mergeRules.length} regras de unificação na base consolidada.`);
+    }, 150);
   };
 
   // Grouping handlers
@@ -483,11 +532,17 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
       alert('Selecione ao menos 1 coluna para agrupar.');
       return;
     }
+    if ((draftAggregationType === 'sum' || draftAggregationType === 'both') && !draftSumColumn) {
+      alert('Selecione a coluna que deseja somar.');
+      return;
+    }
 
     const newPreset: GroupingPreset = {
       id: `grouping-${Date.now()}`,
       name: groupingSaveName.trim(),
-      groupColumns: [...draftGroupColumns]
+      groupColumns: [...draftGroupColumns],
+      aggregationType: draftAggregationType,
+      sumColumn: draftSumColumn
     };
 
     const updatedPresets = [...groupingPresets, newPreset];
@@ -504,14 +559,31 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
       alert('Selecione ao menos uma coluna para realizar o agrupamento.');
       return;
     }
-    setActiveGroupColumns([...cols]);
-    setShowGroupingModal(false);
-    setCurrentPage(1);
+    if ((draftAggregationType === 'sum' || draftAggregationType === 'both') && !draftSumColumn) {
+      alert('Selecione a coluna de valor que deseja somar.');
+      return;
+    }
+
+    setIsProcessingGrid(true);
+    setGridProcessingMessage('Agrupando registros e calculando métricas...');
+
+    setTimeout(() => {
+      setActiveGroupColumns([...cols]);
+      setActiveAggregationType(draftAggregationType);
+      setActiveSumColumn(draftSumColumn);
+      setShowGroupingModal(false);
+      setCurrentPage(1);
+      setIsProcessingGrid(false);
+    }, 150);
   };
 
   const handleClearGrouping = () => {
     setActiveGroupColumns([]);
+    setActiveAggregationType('count');
+    setActiveSumColumn('');
     setDraftGroupColumns([]);
+    setDraftAggregationType('count');
+    setDraftSumColumn('');
     setSelectedGroupingPresetId('');
     setCurrentPage(1);
   };
@@ -522,8 +594,16 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     const preset = groupingPresets.find(p => p.id === presetId);
     if (!preset) return;
 
+    const aggType = preset.aggregationType || 'count';
+    const sumCol = preset.sumColumn || '';
+
     setDraftGroupColumns([...preset.groupColumns]);
+    setDraftAggregationType(aggType);
+    setDraftSumColumn(sumCol);
+
     setActiveGroupColumns([...preset.groupColumns]);
+    setActiveAggregationType(aggType);
+    setActiveSumColumn(sumCol);
     setShowGroupingModal(false);
     setCurrentPage(1);
   };
@@ -555,7 +635,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
         alert(`Selecione a coluna da Condição ${i + 1}.`);
         return;
       }
-      if (['equals', 'contains', 'starts_with', 'ends_with'].includes(cond.operator) && !cond.conditionValue.trim()) {
+      if (['equals', 'not_equals', 'contains', 'starts_with', 'ends_with'].includes(cond.operator) && !cond.conditionValue.trim()) {
         alert(`Informe o valor de comparação na Condição ${i + 1} (${cond.conditionColumn}).`);
         return;
       }
@@ -640,81 +720,104 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
       return;
     }
 
-    let totalReplacements = 0;
-    let affectedRecords = 0;
+    setIsProcessingGrid(true);
+    setGridProcessingMessage('Avaliando regras condicionais e atualizando registros...');
 
-    const updatedRecords = records.map(rec => {
-      let recModified = false;
-      const newRec = { ...rec };
+    setTimeout(() => {
+      let totalReplacements = 0;
+      let affectedRecords = 0;
 
-      conditionalRules.forEach(rule => {
-        // Resolve conditions list (supporting legacy rules if loaded)
-        const clauses: ConditionClause[] = rule.conditions && rule.conditions.length > 0
-          ? rule.conditions
-          : (rule.conditionColumn ? [{
-              id: 'legacy-1',
-              conditionColumn: rule.conditionColumn,
-              operator: rule.operator || 'equals',
-              conditionValue: rule.conditionValue || ''
-            }] : []);
+      const updatedRecords = records.map(rec => {
+        let recModified = false;
+        const newRec = { ...rec };
 
-        if (clauses.length === 0) return;
+        conditionalRules.forEach(rule => {
+          // Resolve conditions list (supporting legacy rules if loaded)
+          const clauses: ConditionClause[] = rule.conditions && rule.conditions.length > 0
+            ? rule.conditions
+            : (rule.conditionColumn ? [{
+                id: 'legacy-1',
+                conditionColumn: rule.conditionColumn,
+                operator: rule.operator || 'equals',
+                conditionValue: rule.conditionValue || ''
+              }] : []);
 
-        const isOr = rule.matchLogic === 'OR';
+          if (clauses.length === 0) return;
 
-        const clauseResults = clauses.map(clause => {
-          const condValRaw = newRec[clause.conditionColumn];
-          const condValStr = condValRaw !== undefined && condValRaw !== null ? String(condValRaw).trim() : '';
-          const targetCondVal = (clause.conditionValue || '').trim();
+          const isOr = rule.matchLogic === 'OR';
 
-          switch (clause.operator) {
-            case 'equals':
-              return condValStr.toLowerCase() === targetCondVal.toLowerCase();
-            case 'contains':
-              return condValStr.toLowerCase().includes(targetCondVal.toLowerCase());
-            case 'starts_with':
-              return condValStr.toLowerCase().startsWith(targetCondVal.toLowerCase());
-            case 'ends_with':
-              return condValStr.toLowerCase().endsWith(targetCondVal.toLowerCase());
-            case 'is_empty':
-              return condValStr === '' || condValStr === '-';
-            case 'is_not_empty':
-              return condValStr !== '' && condValStr !== '-';
-            case 'anything':
-              return true;
-            default:
-              return false;
+          const clauseResults = clauses.map(clause => {
+            const condValRaw = newRec[clause.conditionColumn];
+            const condValStr = condValRaw !== undefined && condValRaw !== null ? String(condValRaw).trim() : '';
+            const targetCondVal = (clause.conditionValue || '').trim();
+
+            switch (clause.operator) {
+              case 'equals':
+                return condValStr.toLowerCase() === targetCondVal.toLowerCase();
+              case 'not_equals':
+                return condValStr.toLowerCase() !== targetCondVal.toLowerCase();
+              case 'contains':
+                return condValStr.toLowerCase().includes(targetCondVal.toLowerCase());
+              case 'starts_with':
+                return condValStr.toLowerCase().startsWith(targetCondVal.toLowerCase());
+              case 'ends_with':
+                return condValStr.toLowerCase().endsWith(targetCondVal.toLowerCase());
+              case 'is_empty':
+                return condValStr === '' || condValStr === '-';
+              case 'is_not_empty':
+                return condValStr !== '' && condValStr !== '-';
+              case 'anything':
+                return true;
+              default:
+                return false;
+            }
+          });
+
+          const isMatch = isOr
+            ? clauseResults.some(res => res)
+            : clauseResults.every(res => res);
+
+          if (isMatch) {
+            let replacement = '';
+            if (rule.replaceType === 'fixed') {
+              replacement = (rule.newValue || '').toUpperCase();
+            } else {
+              const srcVal = newRec[rule.newValue];
+              replacement = srcVal !== undefined && srcVal !== null ? String(srcVal).toUpperCase() : '-';
+            }
+
+            if (newRec[rule.targetColumn] !== replacement) {
+              newRec[rule.targetColumn] = replacement;
+              totalReplacements++;
+              recModified = true;
+            }
           }
         });
 
-        const isMatch = isOr
-          ? clauseResults.some(res => res)
-          : clauseResults.every(res => res);
-
-        if (isMatch) {
-          let replacement = '';
-          if (rule.replaceType === 'fixed') {
-            replacement = (rule.newValue || '').toUpperCase();
-          } else {
-            const srcVal = newRec[rule.newValue];
-            replacement = srcVal !== undefined && srcVal !== null ? String(srcVal).toUpperCase() : '-';
-          }
-
-          if (newRec[rule.targetColumn] !== replacement) {
-            newRec[rule.targetColumn] = replacement;
-            totalReplacements++;
-            recModified = true;
-          }
-        }
+        if (recModified) affectedRecords++;
+        return newRec;
       });
 
-      if (recModified) affectedRecords++;
-      return newRec;
-    });
+      onBulkUpdateRecords(updatedRecords);
+      setShowConditionalModal(false);
+      setIsProcessingGrid(false);
+      alert(`Substituição condicional realizada com sucesso!\n\n• Regras aplicadas: ${conditionalRules.length}\n• Registros afetados: ${affectedRecords}\n• Células modificadas: ${totalReplacements}`);
+    }, 150);
+  };
 
-    onBulkUpdateRecords(updatedRecords);
-    setShowConditionalModal(false);
-    alert(`Substituição condicional realizada com sucesso!\n\n• Regras aplicadas: ${conditionalRules.length}\n• Registros afetados: ${affectedRecords}\n• Células modificadas: ${totalReplacements}`);
+  const handleExportExcelWithLoading = (dataToExport: ConsolidatedRecord[], filename: string) => {
+    setIsExportingExcel(true);
+    setGridProcessingMessage('Gerando planilha Excel (.xlsx)...');
+    setTimeout(() => {
+      try {
+        exportToExcel(dataToExport, summary, filename);
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao exportar planilha Excel.');
+      } finally {
+        setIsExportingExcel(false);
+      }
+    }, 100);
   };
 
   const handleAddNewBlankRecord = () => {
@@ -822,6 +925,18 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
         {/* Action Buttons: Export Excel & Supabase */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           
+          {/* Back to Step 3 Button */}
+          {onBackToStep3 && (
+            <button
+              onClick={onBackToStep3}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all border border-slate-300"
+              title="Voltar para a Etapa 3 de Mapeamento para reconfigurar colunas e reprocessar a base"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
+              <span>Voltar à Etapa 3</span>
+            </button>
+          )}
+
           {/* Supabase Button */}
           <button
             onClick={() => setShowSupabaseModal(true)}
@@ -835,21 +950,23 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
           {/* Direct Export to Excel */}
           {activeGroupColumns.length > 0 && (
             <button
-              onClick={() => exportToExcel(sortedRecords, summary, `Base_Agrupada_${Date.now()}.xlsx`)}
-              className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-purple-600/20"
+              onClick={() => handleExportExcelWithLoading(sortedRecords, `Base_Agrupada_${Date.now()}.xlsx`)}
+              disabled={isExportingExcel}
+              className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-purple-600/20 disabled:opacity-60"
               title="Exportar visão agrupada em formato Excel (.xlsx)"
             >
               <FileSpreadsheet className="w-4 h-4" />
-              <span>Baixar Excel Agrupado</span>
+              <span>{isExportingExcel ? 'Gerando...' : 'Baixar Excel Agrupado'}</span>
             </button>
           )}
           <button
-            onClick={() => exportToExcel(activeGroupColumns.length === 0 ? sortedRecords : filteredBaseRecords, summary, `Base_Consolidada_${Date.now()}.xlsx`)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-blue-600/20"
+            onClick={() => handleExportExcelWithLoading(activeGroupColumns.length === 0 ? sortedRecords : filteredBaseRecords, `Base_Consolidada_${Date.now()}.xlsx`)}
+            disabled={isExportingExcel}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-blue-600/20 disabled:opacity-60"
             title="Exportar dados da base (com filtros aplicados) em formato Excel (.xlsx)"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Baixar Excel da Base</span>
+            <span>{isExportingExcel ? 'Gerando...' : 'Baixar Excel da Base'}</span>
           </button>
 
         </div>
@@ -1243,6 +1360,68 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                   </div>
                 </label>
 
+                {/* Aggregation Type & Sum Column selection */}
+                <div className="p-3 bg-white rounded-lg border border-purple-200 space-y-2">
+                  <label className="block text-xs font-bold text-purple-950">
+                    Forma de Agregação / Cálculo:
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDraftAggregationType('count')}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border text-left flex items-center justify-between transition-colors ${
+                        draftAggregationType === 'count'
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>Quantidade (Contagem)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDraftAggregationType('sum')}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border text-left flex items-center justify-between transition-colors ${
+                        draftAggregationType === 'sum'
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>Soma de Coluna</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDraftAggregationType('both')}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border text-left flex items-center justify-between transition-colors ${
+                        draftAggregationType === 'both'
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>Ambos (Quantidade + Soma)</span>
+                    </button>
+                  </div>
+
+                  {(draftAggregationType === 'sum' || draftAggregationType === 'both') && (
+                    <div className="pt-2 border-t border-purple-100">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Selecione a coluna que deseja somar:
+                      </label>
+                      <select
+                        value={draftSumColumn}
+                        onChange={(e) => setDraftSumColumn(e.target.value)}
+                        className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white font-medium focus:border-purple-500"
+                      >
+                        <option value="">-- Selecionar Coluna para Soma --</option>
+                        {allRawColumns.map((col, idx) => (
+                          <option key={idx} value={col}>
+                            {col}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-2">
                     Selecione as colunas da base que farão parte deste agrupamento:
@@ -1277,7 +1456,16 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                   <div className="p-2.5 bg-white rounded-lg border border-purple-200 text-xs">
                     <span className="font-bold text-purple-900">Resultado do Agrupamento:</span>
                     <p className="text-slate-600 text-[11px] mt-0.5">
-                      A tabela exibirá a combinação única de <span className="font-semibold text-slate-800">{draftGroupColumns.join(', ')}</span> acompanhada de uma coluna com a contagem total de ocorrências <span className="font-bold text-purple-700">"Quantidade"</span>.
+                      A tabela exibirá a combinação única de <span className="font-semibold text-slate-800">{draftGroupColumns.join(', ')}</span>{' '}
+                      {draftAggregationType === 'count' && (
+                        <span>acompanhada de uma coluna com a contagem total <span className="font-bold text-purple-700">"Quantidade"</span>.</span>
+                      )}
+                      {draftAggregationType === 'sum' && (
+                        <span>acompanhada da coluna de <span className="font-bold text-purple-700">"Soma ({draftSumColumn || 'selecione a coluna'})"</span>.</span>
+                      )}
+                      {draftAggregationType === 'both' && (
+                        <span>acompanhada das colunas de <span className="font-bold text-purple-700">"Quantidade"</span> e <span className="font-bold text-purple-700">"Soma ({draftSumColumn || 'selecione a coluna'})"</span>.</span>
+                      )}
                     </p>
                   </div>
                 )}
@@ -1504,6 +1692,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                               className="w-full text-xs px-2 py-1.5 border border-slate-300 rounded-lg outline-none bg-white focus:border-amber-500"
                             >
                               <option value="equals">For igual a</option>
+                              <option value="not_equals">For diferente de</option>
                               <option value="contains">Contiver o texto</option>
                               <option value="starts_with">Começar com</option>
                               <option value="ends_with">Terminar com</option>
@@ -1630,6 +1819,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                     {conditionalRules.map((rule, idx) => {
                       const opTextMap: Record<ReplaceConditionOperator, string> = {
                         equals: 'for igual a',
+                        not_equals: 'for diferente de',
                         contains: 'contiver',
                         starts_with: 'começar com',
                         ends_with: 'terminar com',
@@ -2054,6 +2244,22 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
         recordsToUpload={sortedRecords}
         isGroupedView={activeGroupColumns.length > 0}
       />
+
+      {/* Grid Processing Backdrop Loading Overlay */}
+      {isProcessingGrid && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center p-4 transition-all">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 sm:p-8 max-w-sm w-full flex flex-col items-center text-center space-y-4 border border-slate-100 animate-in fade-in zoom-in-95 duration-200">
+            <div className="relative flex items-center justify-center">
+              <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin" />
+              <RefreshCw className="w-6 h-6 text-emerald-600 absolute animate-pulse" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 text-base sm:text-lg">{gridProcessingMessage || 'Processando dados...'}</h3>
+              <p className="text-xs text-slate-500 mt-1">Aguarde alguns instantes enquanto os registros são atualizados.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
