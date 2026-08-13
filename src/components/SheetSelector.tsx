@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { EsteiraSheet } from '../types';
+import { EsteiraSheet, MacroPreset, ColumnMergePreset, GroupingPreset, ConditionalReplacePreset, ColumnExclusionPreset } from '../types';
 import { Layers, CheckSquare, Square, Eye, ArrowRight, Table, AlertTriangle, FileCheck, RotateCcw, Trash2 } from 'lucide-react';
+import { MacroSelector } from './MacroSelector';
 
 interface SheetSelectorProps {
   sheets: EsteiraSheet[];
@@ -8,6 +9,13 @@ interface SheetSelectorProps {
   onSelectAll: (select: boolean) => void;
   onProceed: () => void;
   onBack: () => void;
+  
+  // Macros
+  onExecuteMacro: (macro: MacroPreset) => void;
+  exclusionPresets: ColumnExclusionPreset[];
+  mergePresets: ColumnMergePreset[];
+  conditionalPresets: ConditionalReplacePreset[];
+  groupingPresets: GroupingPreset[];
 }
 
 export const SheetSelector: React.FC<SheetSelectorProps> = ({
@@ -15,7 +23,12 @@ export const SheetSelector: React.FC<SheetSelectorProps> = ({
   onToggleSheet,
   onSelectAll,
   onProceed,
-  onBack
+  onBack,
+  onExecuteMacro,
+  exclusionPresets,
+  mergePresets,
+  conditionalPresets,
+  groupingPresets
 }) => {
   const [previewSheet, setPreviewSheet] = useState<EsteiraSheet | null>(null);
 
@@ -148,6 +161,7 @@ export const SheetSelector: React.FC<SheetSelectorProps> = ({
       {/* Dedicated Excluded Sheets Area */}
       {deselectedSheets.length > 0 && (
         <div className="bg-rose-50/70 rounded-2xl border border-rose-200 p-5 mb-8 shadow-sm">
+          {/* ... existing excluded area ... */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-rose-200">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-700 flex items-center justify-center font-bold shrink-0">
@@ -204,8 +218,19 @@ export const SheetSelector: React.FC<SheetSelectorProps> = ({
         </div>
       )}
 
+      {/* Macro Selector */}
+      {selectedSheets.length > 0 && (
+        <MacroSelector 
+          onExecuteMacro={onExecuteMacro}
+          exclusionPresets={exclusionPresets}
+          mergePresets={mergePresets}
+          conditionalPresets={conditionalPresets}
+          groupingPresets={groupingPresets}
+        />
+      )}
+
       {/* Summary Footer bar */}
-      <div className="sticky bottom-4 z-40 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-2xl border border-slate-700/80">
+      <div className="sticky bottom-4 z-40 mt-8 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-2xl border border-slate-700/80">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
             <Layers className="w-5 h-5" />

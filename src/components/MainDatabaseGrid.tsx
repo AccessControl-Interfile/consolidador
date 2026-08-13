@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exporter';
 import { SupabaseModal } from './SupabaseModal';
+import { ClearSupabaseTableModal } from './ClearSupabaseTableModal';
 import { saveToFirebase, loadFromFirebase } from '../lib/firebase';
 
 interface MainDatabaseGridProps {
@@ -18,11 +19,25 @@ interface MainDatabaseGridProps {
   onBulkUpdateRecords: (updatedRecords: ConsolidatedRecord[]) => void;
   onResetAll: () => void;
   onBackToStep3?: () => void;
+  initialMacroGroupingPresetId?: string;
 }
 
 const MERGE_STORAGE_KEY = 'esteiras_merge_presets';
 const GROUPING_STORAGE_KEY = 'esteiras_grouping_presets';
 const CONDITIONAL_REPLACE_STORAGE_KEY = 'esteiras_conditional_replace_presets';
+
+const getInitialPreset = <T,>(key: string): T[] => {
+  try {
+    const cached = localStorage.getItem(key);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn(`Failed reading ${key} from localStorage:`, e);
+  }
+  return [];
+};
 
 export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   records,
@@ -32,7 +47,8 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   onAddRecord,
   onBulkUpdateRecords,
   onResetAll,
-  onBackToStep3
+  onBackToStep3,
+  initialMacroGroupingPresetId
 }) => {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -60,7 +76,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
 
   // Multi-Rule Merge Columns Configuration state
   const [showMergeModal, setShowMergeModal] = useState(false);
-  const [mergePresets, setMergePresets] = useState<ColumnMergePreset[]>([]);
+  const [mergePresets, setMergePresets] = useState<ColumnMergePreset[]>(() => getInitialPreset<ColumnMergePreset>(MERGE_STORAGE_KEY));
   const [selectedMergePresetId, setSelectedMergePresetId] = useState<string>('');
   const [mergeRules, setMergeRules] = useState<ColumnMergeRule[]>([]);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
@@ -73,7 +89,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
 
   // Grouping State
   const [showGroupingModal, setShowGroupingModal] = useState(false);
-  const [groupingPresets, setGroupingPresets] = useState<GroupingPreset[]>([]);
+  const [groupingPresets, setGroupingPresets] = useState<GroupingPreset[]>(() => getInitialPreset<GroupingPreset>(GROUPING_STORAGE_KEY));
   const [selectedGroupingPresetId, setSelectedGroupingPresetId] = useState<string>('');
   const [draftGroupColumns, setDraftGroupColumns] = useState<string[]>([]);
   const [draftAggregationType, setDraftAggregationType] = useState<'count' | 'sum' | 'both'>('count');
@@ -89,7 +105,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
 
   // Conditional Replace State
   const [showConditionalModal, setShowConditionalModal] = useState(false);
-  const [conditionalPresets, setConditionalPresets] = useState<ConditionalReplacePreset[]>([]);
+  const [conditionalPresets, setConditionalPresets] = useState<ConditionalReplacePreset[]>(() => getInitialPreset<ConditionalReplacePreset>(CONDITIONAL_REPLACE_STORAGE_KEY));
   const [selectedConditionalPresetId, setSelectedConditionalPresetId] = useState<string>('');
   const [conditionalRules, setConditionalRules] = useState<ConditionalReplaceRule[]>([]);
 
@@ -97,6 +113,9 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const [isProcessingGrid, setIsProcessingGrid] = useState<boolean>(false);
   const [gridProcessingMessage, setGridProcessingMessage] = useState<string>('Processando dados...');
   const [isExportingExcel, setIsExportingExcel] = useState<boolean>(false);
+
+  // Clear Table Modal State
+  const [showClearTableModal, setShowClearTableModal] = useState<boolean>(false);
 
   // Conditional Replace Form Draft
   const [draftTargetCol, setDraftTargetCol] = useState<string>('');
@@ -107,6 +126,30 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const [draftReplaceType, setDraftReplaceType] = useState<'fixed' | 'column'>('fixed');
   const [draftNewVal, setDraftNewVal] = useState<string>('');
   const [conditionalSaveName, setConditionalSaveName] = useState<string>('');
+
+  const updateAndSaveMergePresets = (updated: ColumnMergePreset[]) => {
+    setMergePresets(updated);
+    try {
+      localStorage.setItem(MERGE_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+    saveToFirebase(MERGE_STORAGE_KEY, updated);
+  };
+
+  const updateAndSaveGroupingPresets = (updated: GroupingPreset[]) => {
+    setGroupingPresets(updated);
+    try {
+      localStorage.setItem(GROUPING_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+    saveToFirebase(GROUPING_STORAGE_KEY, updated);
+  };
+
+  const updateAndSaveConditionalPresets = (updated: ConditionalReplacePreset[]) => {
+    setConditionalPresets(updated);
+    try {
+      localStorage.setItem(CONDITIONAL_REPLACE_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+    saveToFirebase(CONDITIONAL_REPLACE_STORAGE_KEY, updated);
+  };
 
   const handleAddConditionClause = () => {
     setDraftConditions(prev => [
@@ -124,21 +167,24 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     setDraftConditions(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
   };
 
-  // Load saved merge, grouping & conditional presets from Firebase
+  // Sync saved merge, grouping & conditional presets with Firebase
   useEffect(() => {
     const loadAllPresets = async () => {
       try {
         const savedMerge = await loadFromFirebase<ColumnMergePreset[]>(MERGE_STORAGE_KEY);
-        if (savedMerge && Array.isArray(savedMerge)) {
+        if (savedMerge && Array.isArray(savedMerge) && savedMerge.length > 0) {
           setMergePresets(savedMerge);
+          localStorage.setItem(MERGE_STORAGE_KEY, JSON.stringify(savedMerge));
         }
         const savedGrouping = await loadFromFirebase<GroupingPreset[]>(GROUPING_STORAGE_KEY);
-        if (savedGrouping && Array.isArray(savedGrouping)) {
+        if (savedGrouping && Array.isArray(savedGrouping) && savedGrouping.length > 0) {
           setGroupingPresets(savedGrouping);
+          localStorage.setItem(GROUPING_STORAGE_KEY, JSON.stringify(savedGrouping));
         }
         const savedConditional = await loadFromFirebase<ConditionalReplacePreset[]>(CONDITIONAL_REPLACE_STORAGE_KEY);
-        if (savedConditional && Array.isArray(savedConditional)) {
+        if (savedConditional && Array.isArray(savedConditional) && savedConditional.length > 0) {
           setConditionalPresets(savedConditional);
+          localStorage.setItem(CONDITIONAL_REPLACE_STORAGE_KEY, JSON.stringify(savedConditional));
         }
       } catch (e) {
         console.error('Failed to load presets from Firebase', e);
@@ -146,6 +192,17 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     };
     loadAllPresets();
   }, []);
+
+  useEffect(() => {
+    if (initialMacroGroupingPresetId && groupingPresets.length > 0) {
+      const preset = groupingPresets.find(p => p.id === initialMacroGroupingPresetId);
+      if (preset) {
+        setActiveGroupColumns([...preset.groupColumns]);
+        setActiveAggregationType(preset.aggregationType || 'count');
+        setActiveSumColumn(preset.sumColumn || '');
+      }
+    }
+  }, [initialMacroGroupingPresetId, groupingPresets]);
 
   // Extract raw column keys from base records
   const allRawColumns = useMemo(() => {
@@ -434,8 +491,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     };
 
     const updatedPresets = [...mergePresets, newPreset];
-    setMergePresets(updatedPresets);
-    saveToFirebase(MERGE_STORAGE_KEY, updatedPresets);
+    updateAndSaveMergePresets(updatedPresets);
     setSelectedMergePresetId(newPreset.id);
     setPresetSaveName('');
     alert(`Configuração "${newPreset.name}" salva com sucesso contendo ${newPreset.rules.length} unificações de colunas!`);
@@ -457,8 +513,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const handleDeleteMergePreset = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const updated = mergePresets.filter(p => p.id !== id);
-    setMergePresets(updated);
-    saveToFirebase(MERGE_STORAGE_KEY, updated);
+    updateAndSaveMergePresets(updated);
     if (selectedMergePresetId === id) {
       setSelectedMergePresetId('');
       setMergeRules([]);
@@ -546,8 +601,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     };
 
     const updatedPresets = [...groupingPresets, newPreset];
-    setGroupingPresets(updatedPresets);
-    saveToFirebase(GROUPING_STORAGE_KEY, updatedPresets);
+    updateAndSaveGroupingPresets(updatedPresets);
     setSelectedGroupingPresetId(newPreset.id);
     setGroupingSaveName('');
     alert(`Configuração de agrupamento "${newPreset.name}" salva com sucesso!`);
@@ -611,8 +665,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const handleDeleteGroupingPreset = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const updated = groupingPresets.filter(p => p.id !== id);
-    setGroupingPresets(updated);
-    saveToFirebase(GROUPING_STORAGE_KEY, updated);
+    updateAndSaveGroupingPresets(updated);
     if (selectedGroupingPresetId === id) {
       setSelectedGroupingPresetId('');
     }
@@ -688,8 +741,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     };
 
     const updatedPresets = [...conditionalPresets, newPreset];
-    setConditionalPresets(updatedPresets);
-    saveToFirebase(CONDITIONAL_REPLACE_STORAGE_KEY, updatedPresets);
+    updateAndSaveConditionalPresets(updatedPresets);
     setSelectedConditionalPresetId(newPreset.id);
     setConditionalSaveName('');
     alert(`Configuração de substituição condicional "${newPreset.name}" salva com sucesso!`);
@@ -707,8 +759,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const handleDeleteConditionalPreset = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const updated = conditionalPresets.filter(p => p.id !== id);
-    setConditionalPresets(updated);
-    saveToFirebase(CONDITIONAL_REPLACE_STORAGE_KEY, updated);
+    updateAndSaveConditionalPresets(updated);
     if (selectedConditionalPresetId === id) {
       setSelectedConditionalPresetId('');
     }
@@ -890,6 +941,11 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
           >
             <Merge className="w-3.5 h-3.5 text-indigo-200" />
             <span>Unificação de Colunas</span>
+            {mergePresets.length > 0 && (
+              <span className="bg-indigo-800 text-indigo-100 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                {mergePresets.length} salvas
+              </span>
+            )}
           </button>
 
           {/* Groupings Button */}
@@ -908,6 +964,11 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                 ? `Agrupamento Ativo (${activeGroupColumns.length})`
                 : 'Agrupamentos'}
             </span>
+            {groupingPresets.length > 0 && (
+              <span className="bg-purple-900/80 text-purple-100 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                {groupingPresets.length} salvos
+              </span>
+            )}
           </button>
 
           {/* Conditional Value Replacement Button */}
@@ -918,6 +979,22 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
           >
             <Replace className="w-3.5 h-3.5 text-amber-200" />
             <span>Substituição Condicional</span>
+            {conditionalPresets.length > 0 && (
+              <span className="bg-amber-800 text-amber-100 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                {conditionalPresets.length} salvas
+              </span>
+            )}
+          </button>
+
+          {/* Clear Table Button */}
+          <button
+            onClick={() => setShowClearTableModal(true)}
+            disabled={records.length === 0}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-xl transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Limpar todos os registros da tabela consolidada"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+            <span>Limpar Tabela</span>
           </button>
 
         </div>
@@ -1406,18 +1483,14 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Selecione a coluna que deseja somar:
                       </label>
-                      <select
+                      <input
+                        type="text"
+                        list="all-columns-list"
                         value={draftSumColumn}
                         onChange={(e) => setDraftSumColumn(e.target.value)}
+                        placeholder="Digite ou selecione a coluna para soma"
                         className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white font-medium focus:border-purple-500"
-                      >
-                        <option value="">-- Selecionar Coluna para Soma --</option>
-                        {allRawColumns.map((col, idx) => (
-                          <option key={idx} value={col}>
-                            {col}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </div>
                   )}
                 </div>
@@ -1596,16 +1669,19 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                   <label className="block text-[11px] font-bold text-slate-800 mb-1">
                     1. Coluna que terá o valor alterado (Coluna Alvo):
                   </label>
-                  <select
+                  <input
+                    type="text"
+                    list="all-columns-list"
                     value={draftTargetCol}
                     onChange={(e) => setDraftTargetCol(e.target.value)}
+                    placeholder="Digite ou selecione a coluna alvo"
                     className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white font-medium focus:border-amber-500 shadow-sm"
-                  >
-                    <option value="">-- Selecionar Coluna Alvo --</option>
+                  />
+                  <datalist id="all-columns-list">
                     {allRawColumns.map((col, idx) => (
-                      <option key={idx} value={col}>{col}</option>
+                      <option key={idx} value={col} />
                     ))}
-                  </select>
+                  </datalist>
                 </div>
 
                 {/* Multiple Condition Clauses Section */}
@@ -1669,16 +1745,14 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                             <label className="block text-[10px] font-medium text-slate-500 mb-0.5">
                               Coluna Referência
                             </label>
-                            <select
+                            <input
+                              type="text"
+                              list="all-columns-list"
                               value={cond.conditionColumn}
                               onChange={(e) => handleUpdateConditionClause(cond.id, 'conditionColumn', e.target.value)}
+                              placeholder="Digite a coluna"
                               className="w-full text-xs px-2 py-1.5 border border-slate-300 rounded-lg outline-none bg-white focus:border-amber-500"
-                            >
-                              <option value="">-- Selecionar --</option>
-                              {allRawColumns.map((col, idx) => (
-                                <option key={idx} value={col}>{col}</option>
-                              ))}
-                            </select>
+                            />
                           </div>
 
                           {/* Operator */}
@@ -1778,16 +1852,14 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                         className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg outline-none bg-white focus:border-amber-500"
                       />
                     ) : (
-                      <select
+                      <input
+                        type="text"
+                        list="all-columns-list"
                         value={draftNewVal}
                         onChange={(e) => setDraftNewVal(e.target.value)}
+                        placeholder="Digite a coluna origem"
                         className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg outline-none bg-white font-medium focus:border-amber-500"
-                      >
-                        <option value="">-- Selecionar Coluna Origem --</option>
-                        {allRawColumns.map((col, idx) => (
-                          <option key={idx} value={col}>{col}</option>
-                        ))}
-                      </select>
+                      />
                     )}
                   </div>
                 </div>
@@ -1922,6 +1994,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
       )}
 
       {/* Main Data Table */}
+      {useMemo(() => (
       <div className="overflow-x-auto min-h-[380px]">
         <table className="w-full text-xs text-left border-collapse">
           
@@ -2096,8 +2169,42 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
           <tbody className="divide-y divide-slate-100">
             {paginatedRecords.length === 0 ? (
               <tr>
-                <td colSpan={visibleColumns.length + 1} className="text-center py-12 text-slate-400 text-xs">
-                  Nenhum registro encontrado na base consolidada.
+                <td colSpan={visibleColumns.length + 1} className="text-center py-16 px-4">
+                  <div className="max-w-md mx-auto flex flex-col items-center text-center space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center border border-slate-200">
+                      <Trash2 className="w-6 h-6 text-slate-400" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-800">
+                        {records.length === 0 ? 'A tabela está vazia' : 'Nenhum registro encontrado'}
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {records.length === 0
+                          ? 'Todos os registros foram removidos da base consolidada.'
+                          : 'Nenhum registro atende aos filtros de coluna ou agrupamento aplicados.'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 pt-2">
+                      {records.length === 0 && onBackToStep3 && (
+                        <button
+                          onClick={onBackToStep3}
+                          className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>Reprocessar na Etapa 3</span>
+                        </button>
+                      )}
+                      {records.length > 0 && Object.keys(columnFilters).length > 0 && (
+                        <button
+                          onClick={() => setColumnFilters({})}
+                          className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Limpar Filtros</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -2178,6 +2285,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
 
         </table>
       </div>
+      ), [paginatedRecords, visibleColumns, activeFilterColumn, filterSearchQuery, columnFilters, sortColumn, sortDirection, editingCell, cellValue, currentPage, pageSize, records.length, pendingFilterSelections])}
 
       {/* Status Footer - Strictly 20 preview lines */}
       <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-semibold text-slate-600">
@@ -2235,6 +2343,12 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
           </div>
         </div>
       )}
+
+      {/* Clear Supabase Table Modal */}
+      <ClearSupabaseTableModal
+        isOpen={showClearTableModal}
+        onClose={() => setShowClearTableModal(false)}
+      />
 
       {/* Supabase Upload Modal */}
       <SupabaseModal

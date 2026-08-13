@@ -1,22 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import {
   EsteiraSheet, GroupedColumnMapping, ConsolidationConfig,
-  ConsolidatedRecord, ConsolidationSummary, HistoryEntry
+  ConsolidatedRecord, ConsolidationSummary, HistoryEntry,
+  MacroPreset, ColumnExclusionPreset, ColumnMergePreset,
+  ConditionalReplacePreset, GroupingPreset
 } from './types';
 import { parseExcelFile } from './utils/excelParser';
 import { createDemoSheets, generateDemoExcelFile } from './utils/demoData';
 import { generateSmartColumnMappings } from './utils/columnMatcher';
 import { consolidateSheets } from './utils/consolidator';
+import { applyMergeRules, applyConditionalReplaceRules } from './utils/macroProcessor';
 import { Header } from './components/Header';
 import { UploadSection } from './components/UploadSection';
 import { SheetSelector } from './components/SheetSelector';
 import { ColumnMapper } from './components/ColumnMapper';
 import { MainDatabaseGrid } from './components/MainDatabaseGrid';
-import { HistoryDrawer } from './components/HistoryDrawer';
 import { LoginScreen } from './components/LoginScreen';
 import { CheckCircle2, RefreshCw, ArrowLeft } from 'lucide-react';
-import { purgeLocalStorage, saveToFirebase, loadFromFirebase, deleteFromFirebase } from './lib/firebase';
 import { supabase } from './lib/supabase';
+import { loadFromFirebase } from './lib/firebase';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -46,6 +48,53 @@ export default function App() {
     }
   });
 
+  // Presets State for Macros
+  const [exclusionPresets, setExclusionPresets] = useState<ColumnExclusionPreset[]>([]);
+  const [mergePresets, setMergePresets] = useState<ColumnMergePreset[]>([]);
+  const [conditionalPresets, setConditionalPresets] = useState<ConditionalReplacePreset[]>([]);
+  const [groupingPresets, setGroupingPresets] = useState<GroupingPreset[]>([]);
+  const [initialMacroGroupingPresetId, setInitialMacroGroupingPresetId] = useState<string>('');
+
+  useEffect(() => {
+    const loadAllPresets = async () => {
+      // First load from localStorage for immediate render
+      try {
+        const p1 = localStorage.getItem('esteiras_exclusion_presets');
+        if (p1) setExclusionPresets(JSON.parse(p1));
+        
+        const p2 = localStorage.getItem('esteiras_merge_presets');
+        if (p2) setMergePresets(JSON.parse(p2));
+
+        const p3 = localStorage.getItem('esteiras_conditional_replace_presets');
+        if (p3) setConditionalPresets(JSON.parse(p3));
+
+        const p4 = localStorage.getItem('esteiras_grouping_presets');
+        if (p4) setGroupingPresets(JSON.parse(p4));
+      } catch (e) {
+        console.error('Error parsing local presets in App:', e);
+      }
+
+      // Then load from Firebase for up-to-date values
+      try {
+        const fb1 = await loadFromFirebase<ColumnExclusionPreset[]>('esteiras_exclusion_presets');
+        if (fb1 && Array.isArray(fb1)) setExclusionPresets(fb1);
+
+        const fb2 = await loadFromFirebase<ColumnMergePreset[]>('esteiras_merge_presets');
+        if (fb2 && Array.isArray(fb2)) setMergePresets(fb2);
+
+        const fb3 = await loadFromFirebase<ConditionalReplacePreset[]>('esteiras_conditional_replace_presets');
+        if (fb3 && Array.isArray(fb3)) setConditionalPresets(fb3);
+
+        const fb4 = await loadFromFirebase<GroupingPreset[]>('esteiras_grouping_presets');
+        if (fb4 && Array.isArray(fb4)) setGroupingPresets(fb4);
+      } catch (e) {
+        console.error('Error loading presets from Firebase in App:', e);
+      }
+    };
+    
+    loadAllPresets();
+  }, [currentStep]);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setIsAuthenticated(false);
@@ -56,43 +105,7 @@ export default function App() {
   const [consolidationSummary, setConsolidationSummary] = useState<ConsolidationSummary | null>(null);
 
   // History Drawer
-  const [showHistoryDrawer, setShowHistoryDrawer] = useState<boolean>(false);
-  const [historyList, setHistoryList] = useState<HistoryEntry[]>([]);
 
-  // Purge localStorage and load history from Firebase
-  useEffect(() => {
-    purgeLocalStorage();
-
-    const loadHistory = async () => {
-      try {
-        const saved = await loadFromFirebase<HistoryEntry[]>('esteiras_consolidation_history');
-        if (saved && Array.isArray(saved)) {
-          setHistoryList(saved);
-        }
-      } catch (e) {
-        console.error('Failed to load history from Firebase', e);
-      }
-    };
-    loadHistory();
-  }, []);
-
-  const saveToHistory = (summary: ConsolidationSummary, records: ConsolidatedRecord[], config: ConsolidationConfig) => {
-    const newEntry: HistoryEntry = {
-      id: `hist-${Date.now()}`,
-      fileName: summary.fileName,
-      timestamp: summary.createdAt,
-      totalRecords: summary.totalRecords,
-      esteiraNames: summary.recordsPerEsteira.map(r => r.esteira),
-      columnsCount: summary.unifiedColumnsCount,
-      summary,
-      records,
-      config
-    };
-
-    const updated = [newEntry, ...historyList.slice(0, 9)]; // Keep last 10
-    setHistoryList(updated);
-    saveToFirebase('esteiras_consolidation_history', updated);
-  };
 
   const handleFileUpload = (file: File) => {
     setIsLoading(true);
@@ -159,6 +172,84 @@ export default function App() {
     setSheets(prev => prev.map(s => ({ ...s, selected: select })));
   };
 
+  const handleExecuteMacro = (macro: MacroPreset) => {
+    const selected = sheets.filter(s => s.selected);
+    if (selected.length === 0) {
+      alert('Selecione ao menos uma aba (esteira) para prosseguir.');
+      return;
+    }
+
+    setIsLoading(true);
+    setLoadingMessage(`Executando Macro: ${macro.name}...`);
+
+    setTimeout(() => {
+      try {
+        // 1. Generate Smart Column Mappings
+        let mappings = generateSmartColumnMappings(sheets, false);
+        
+        // 2. Apply Exclusion Preset if present
+        if (macro.exclusionPresetId) {
+          const excPreset = exclusionPresets.find(p => p.id === macro.exclusionPresetId);
+          if (excPreset) {
+            mappings = mappings.map(m => {
+              if (excPreset.excludedColumns.includes(m.targetColumnName)) {
+                return { ...m, sourceMappings: m.sourceMappings.map(sm => ({ ...sm, isIgnored: true })) };
+              }
+              const renameRule = excPreset.renames?.find(r => r.originalName === m.targetColumnName);
+              if (renameRule) {
+                return { ...m, targetColumnName: renameRule.newName };
+              }
+              return m;
+            });
+          }
+        }
+        setColumnMappings(mappings);
+
+        // 3. Consolidate Base
+        const activeMappings = mappings.filter(m => !m.sourceMappings.every(sm => sm.isIgnored));
+        const fullConfig: ConsolidationConfig = {
+          ...cleaningConfig,
+          groupMappings: mappings
+        };
+
+        let { records, summary } = consolidateSheets(sheets, fullConfig, fileName);
+
+        // 4. Apply Merge Preset
+        if (macro.mergePresetId) {
+          const mPreset = mergePresets.find(p => p.id === macro.mergePresetId);
+          if (mPreset && mPreset.rules.length > 0) {
+            records = applyMergeRules(records, mPreset.rules);
+          }
+        }
+
+        // 5. Apply Conditional Replace Preset
+        if (macro.conditionalPresetId) {
+          const cPreset = conditionalPresets.find(p => p.id === macro.conditionalPresetId);
+          if (cPreset && cPreset.rules.length > 0) {
+            records = applyConditionalReplaceRules(records, cPreset.rules);
+          }
+        }
+
+        setConsolidatedRecords(records);
+        setConsolidationSummary(summary);
+        
+        // 6. Apply Grouping Preset
+        if (macro.groupingPresetId) {
+          setInitialMacroGroupingPresetId(macro.groupingPresetId);
+        } else {
+          setInitialMacroGroupingPresetId('');
+        }
+
+        setCurrentStep(4);
+      } catch (err) {
+        console.error('Erro na macro:', err);
+        alert('Ocorreu um erro durante a execução da Macro.');
+      } finally {
+        setIsLoading(false);
+      }
+    }, 300);
+  };
+
   const handleProceedToMapping = () => {
     const selected = sheets.filter(s => s.selected);
     if (selected.length === 0) {
@@ -220,7 +311,6 @@ export default function App() {
 
         setConsolidatedRecords(records);
         setConsolidationSummary(summary);
-        saveToHistory(summary, records, fullConfig);
 
         setCurrentStep(4);
       } catch (err) {
@@ -274,25 +364,7 @@ export default function App() {
     setConsolidationSummary(null);
   };
 
-  const handleSelectHistoryEntry = (entry: HistoryEntry) => {
-    setConsolidatedRecords(entry.records);
-    setConsolidationSummary(entry.summary);
-    setCleaningConfig(entry.config);
-    setFileName(entry.fileName);
-    setCurrentStep(4);
-    setShowHistoryDrawer(false);
-  };
 
-  const handleDeleteHistoryEntry = (id: string) => {
-    const updated = historyList.filter(h => h.id !== id);
-    setHistoryList(updated);
-    saveToFirebase('esteiras_consolidation_history', updated);
-  };
-
-  const handleClearAllHistory = () => {
-    setHistoryList([]);
-    deleteFromFirebase('esteiras_consolidation_history');
-  };
 
   if (!isAuthenticated) {
     return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
@@ -308,8 +380,6 @@ export default function App() {
         onReset={handleResetAll}
         onLoadDemo={handleLoadDemo}
         onDownloadDemoTemplate={handleDownloadDemoTemplate}
-        onOpenHistory={() => setShowHistoryDrawer(true)}
-        historyCount={historyList.length}
         onLogout={handleLogout}
       />
 
@@ -334,6 +404,11 @@ export default function App() {
             onSelectAll={handleSelectAllSheets}
             onProceed={handleProceedToMapping}
             onBack={() => setCurrentStep(1)}
+            onExecuteMacro={handleExecuteMacro}
+            exclusionPresets={exclusionPresets}
+            mergePresets={mergePresets}
+            conditionalPresets={conditionalPresets}
+            groupingPresets={groupingPresets}
           />
         )}
 
@@ -399,6 +474,7 @@ export default function App() {
               onBulkUpdateRecords={setConsolidatedRecords}
               onResetAll={handleResetAll}
               onBackToStep3={handleBackToStep3}
+              initialMacroGroupingPresetId={initialMacroGroupingPresetId}
             />
 
           </div>
@@ -406,16 +482,7 @@ export default function App() {
 
       </main>
 
-      {/* History Drawer */}
-      {showHistoryDrawer && (
-        <HistoryDrawer
-          history={historyList}
-          onSelectHistory={handleSelectHistoryEntry}
-          onDeleteHistory={handleDeleteHistoryEntry}
-          onClearAll={handleClearAllHistory}
-          onClose={() => setShowHistoryDrawer(false)}
-        />
-      )}
+
 
       {/* Global Processing Loading Overlay */}
       {isLoading && (

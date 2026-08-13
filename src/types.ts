@@ -108,6 +108,15 @@ export interface AiAnalysisReport {
   recomendacoes: string[];
 }
 
+export interface MacroPreset {
+  id: string;
+  name: string;
+  exclusionPresetId?: string;
+  mergePresetId?: string;
+  conditionalPresetId?: string;
+  groupingPresetId?: string;
+}
+
 export interface HistoryEntry {
   id: string;
   fileName: string;
@@ -116,7 +125,6 @@ export interface HistoryEntry {
   esteiraNames: string[];
   columnsCount: number;
   summary: ConsolidationSummary;
-  records: ConsolidatedRecord[];
   config: ConsolidationConfig;
 }
 

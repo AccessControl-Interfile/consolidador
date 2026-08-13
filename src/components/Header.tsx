@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, FileSpreadsheet, Sparkles, History, Download, RefreshCw, Flame, LogOut } from 'lucide-react';
+import { Layers, FileSpreadsheet, Sparkles, Download, RefreshCw, Flame, LogOut } from 'lucide-react';
 
 interface HeaderProps {
   currentStep: number;
@@ -7,8 +7,6 @@ interface HeaderProps {
   onReset: () => void;
   onLoadDemo: () => void;
   onDownloadDemoTemplate: () => void;
-  onOpenHistory: () => void;
-  historyCount: number;
   onLogout?: () => void;
 }
 
@@ -18,8 +16,6 @@ export const Header: React.FC<HeaderProps> = ({
   onReset,
   onLoadDemo,
   onDownloadDemoTemplate,
-  onOpenHistory,
-  historyCount,
   onLogout
 }) => {
   return (
