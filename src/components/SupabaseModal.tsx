@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { X, Database, CheckCircle2, AlertCircle, RefreshCw, UploadCloud, Table } from 'lucide-react';
+import { X, Database, CheckCircle2, AlertCircle, RefreshCw, UploadCloud, Table, Calendar, Trash2, Sparkles, Filter, Info } from 'lucide-react';
 import { SupabaseTable, SupabaseColumnMapping, ConsolidatedRecord } from '../types';
 
 interface SupabaseModalProps {
@@ -58,6 +58,16 @@ function convertBRDateToISO(val: string): string {
   return str;
 }
 
+function formatDateDisplayBR(isoDate: string): string {
+  if (!isoDate) return '';
+  const clean = isoDate.split('T')[0];
+  const parts = clean.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return isoDate;
+}
+
 export const SupabaseModal: React.FC<SupabaseModalProps> = ({
   isOpen,
   onClose,
@@ -73,7 +83,12 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const [columnMappings, setColumnMappings] = useState<SupabaseColumnMapping[]>([]);
-  const [clearExistingData, setClearExistingData] = useState<boolean>(false);
+  
+  // Cleanup Mode: 'none' | 'period' | 'all'
+  const [cleanupMode, setCleanupMode] = useState<'none' | 'period' | 'all'>('none');
+  const [periodStartDate, setPeriodStartDate] = useState<string>('');
+  const [periodEndDate, setPeriodEndDate] = useState<string>('');
+  const [periodDateColumn, setPeriodDateColumn] = useState<string>('data');
 
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
@@ -84,8 +99,47 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       testAndFetchSchema();
+      // Try to auto-detect date range from records
+      detectDateRangeFromRecords();
     }
   }, [isOpen]);
+
+  const detectDateRangeFromRecords = () => {
+    if (!recordsToUpload || recordsToUpload.length === 0) return;
+
+    // Find date columns in appColumns
+    const dateCandidates = appColumns.filter(c => {
+      const low = c.toLowerCase();
+      return low.includes('data') || low.includes('date') || low.includes('dt') || low.includes('periodo') || low.includes('referencia');
+    });
+
+    const colsToSearch = dateCandidates.length > 0 ? dateCandidates : appColumns;
+
+    for (const col of colsToSearch) {
+      let minD: string | null = null;
+      let maxD: string | null = null;
+      let validDatesFound = 0;
+
+      for (const rec of recordsToUpload) {
+        const val = rec[col];
+        if (val !== undefined && val !== null) {
+          const str = String(val).trim();
+          const iso = convertBRDateToISO(str).split('T')[0];
+          if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+            validDatesFound++;
+            if (!minD || iso < minD) minD = iso;
+            if (!maxD || iso > maxD) maxD = iso;
+          }
+        }
+      }
+
+      if (validDatesFound > 0 && minD && maxD) {
+        setPeriodStartDate(minD);
+        setPeriodEndDate(maxD);
+        return;
+      }
+    }
+  };
 
   useEffect(() => {
     if (appColumns.length > 0) {
@@ -178,13 +232,22 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     setSelectedTable(tableName);
     if (tableName === 'custom') {
       setTableColumns([]);
+      setPeriodDateColumn('data');
       return;
     }
     const t = tableList.find(x => x.name === tableName);
     if (t && t.columns) {
-      setTableColumns(t.columns.map(c => c.name));
+      const colNames = t.columns.map(c => c.name);
+      setTableColumns(colNames);
+      
+      // Auto-detect 'data' or similar date column in table
+      const matchedDataCol = colNames.find(c => c.toLowerCase() === 'data') ||
+        colNames.find(c => c.toLowerCase().includes('data') || c.toLowerCase().includes('date') || c.toLowerCase().includes('dt_')) ||
+        'data';
+      setPeriodDateColumn(matchedDataCol);
     } else {
       setTableColumns([]);
+      setPeriodDateColumn('data');
     }
   };
 
@@ -192,6 +255,26 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     setColumnMappings(prev =>
       prev.map(m => m.appColumn === appCol ? { ...m, supabaseColumn: targetCol } : m)
     );
+  };
+
+  const handleSetCurrentMonth = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const start = new Date(y, m, 1);
+    const end = new Date(y, m + 1, 0);
+    setPeriodStartDate(start.toISOString().split('T')[0]);
+    setPeriodEndDate(end.toISOString().split('T')[0]);
+  };
+
+  const handleSetPreviousMonth = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const start = new Date(y, m - 1, 1);
+    const end = new Date(y, m, 0);
+    setPeriodStartDate(start.toISOString().split('T')[0]);
+    setPeriodEndDate(end.toISOString().split('T')[0]);
   };
 
   const handleStartUpload = async () => {
@@ -207,6 +290,23 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
       return;
     }
 
+    // Validate period cleanup if active
+    if (cleanupMode === 'period') {
+      if (!periodStartDate || !periodEndDate) {
+        alert('Por favor, defina a Data Inicial e a Data Final para o período de limpeza da base.');
+        return;
+      }
+      if (periodStartDate > periodEndDate) {
+        alert('A Data Inicial não pode ser posterior à Data Final.');
+        return;
+      }
+      const targetDateCol = (periodDateColumn || 'data').trim();
+      if (!targetDateCol) {
+        alert('Informe a coluna de data a ser considerada para exclusão no Supabase (padrão: data).');
+        return;
+      }
+    }
+
     setIsUploading(true);
     setUploadProgress(0);
     setUploadStatus('Autenticando e preparando envio...');
@@ -214,9 +314,39 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     setUploadSuccess(false);
 
     try {
-      if (clearExistingData) {
-        setUploadStatus(`Excluindo dados existentes da tabela "${activeTableName}"...`);
-        const targetCol = validMappings[0].supabaseColumn;
+      // 1. EXECUTE CLEANUP IF REQUESTED
+      if (cleanupMode === 'period') {
+        const targetDateCol = (periodDateColumn || 'data').trim();
+        const startDisplay = formatDateDisplayBR(periodStartDate);
+        const endDisplay = formatDateDisplayBR(periodEndDate);
+        
+        setUploadStatus(`Limpando registros existentes no período de ${startDisplay} a ${endDisplay} na tabela "${activeTableName}" (coluna "${targetDateCol}")...`);
+        
+        // Deletion query in Supabase (handles timestamp end-of-day as well as date formats)
+        const endOfDayISO = `${periodEndDate}T23:59:59.999Z`;
+
+        // First attempt with ISO timestamp bounds
+        let { error: delErr } = await supabase
+          .from(activeTableName)
+          .delete()
+          .gte(targetDateCol, periodStartDate)
+          .lte(targetDateCol, endOfDayISO);
+
+        if (delErr) {
+          // Fallback attempt with pure date string bounds for strict SQL DATE columns
+          const { error: delErr2 } = await supabase
+            .from(activeTableName)
+            .delete()
+            .gte(targetDateCol, periodStartDate)
+            .lte(targetDateCol, periodEndDate);
+
+          if (delErr2) {
+            throw new Error(`Erro ao excluir registros do período (${startDisplay} a ${endDisplay}) na coluna "${targetDateCol}": ${delErr2.message || delErr.message}`);
+          }
+        }
+      } else if (cleanupMode === 'all') {
+        setUploadStatus(`Excluindo todos os dados existentes da tabela "${activeTableName}"...`);
+        const targetCol = validMappings[0]?.supabaseColumn || 'id';
 
         const { error: delErr1 } = await supabase.from(activeTableName).delete().not(targetCol, 'is', null);
         const { error: delErr2 } = await supabase.from(activeTableName).delete().is(targetCol, null);
@@ -226,6 +356,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
         }
       }
 
+      // 2. CONSTRUCT PAYLOAD AND INSERT RECORDS
       const payloads = recordsToUpload.map(rec => {
         const row: Record<string, any> = {};
         validMappings.forEach(map => {
@@ -257,19 +388,25 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
 
       for (let i = 0; i < totalRows; i += BATCH_SIZE) {
         const batch = payloads.slice(i, i + BATCH_SIZE);
-        setUploadStatus(`Enviando linhas ${i + 1} até ${Math.min(i + BATCH_SIZE, totalRows)} de ${totalRows}...`);
+        setUploadStatus(`Enviando registros ${i + 1} até ${Math.min(i + BATCH_SIZE, totalRows)} de ${totalRows}...`);
 
         const { error } = await supabase.from(activeTableName).insert(batch);
 
         if (error) {
-          throw new Error(`Erro no Supabase (Linhas ${i + 1}-${Math.min(i + BATCH_SIZE, totalRows)}): ${error.message}`);
+          throw new Error(`Erro no Supabase (Registros ${i + 1}-${Math.min(i + BATCH_SIZE, totalRows)}): ${error.message}`);
         }
 
         setUploadProgress(Math.round(((i + batch.length) / totalRows) * 100));
       }
 
       setUploadSuccess(true);
-      setUploadStatus(`Sucesso! ${totalRows} registros foram inseridos na tabela "${activeTableName}".`);
+      let successMsg = `${totalRows} registros inseridos com sucesso na tabela "${activeTableName}".`;
+      if (cleanupMode === 'period') {
+        successMsg = `Período (${formatDateDisplayBR(periodStartDate)} a ${formatDateDisplayBR(periodEndDate)}) limpo e ${totalRows} novos registros inseridos na tabela "${activeTableName}".`;
+      } else if (cleanupMode === 'all') {
+        successMsg = `Tabela "${activeTableName}" limpa e ${totalRows} novos registros gravados com sucesso.`;
+      }
+      setUploadStatus(successMsg);
     } catch (err: any) {
       setUploadError(err.message || 'Ocorreu um erro ao enviar os dados para o Supabase.');
     } finally {
@@ -281,7 +418,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 border border-slate-200">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-200 bg-slate-900 flex items-center justify-between">
@@ -291,8 +428,11 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                Exportar para Banco de Dados
+                Exportar para Banco de Dados (Supabase)
               </h3>
+              <p className="text-[11px] text-slate-400">
+                Selecione a tabela de destino, defina as regras de limpeza e mapeie os campos antes de enviar.
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-300 hover:text-white p-1.5 hover:bg-white/10 rounded-lg transition-colors">
@@ -300,7 +440,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
           </button>
         </div>
 
-        <div className="p-6 space-y-5 max-h-[72vh] overflow-y-auto">
+        <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
           {connectionError && (
             <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 rounded-xl text-xs space-y-3">
               <div className="flex items-start gap-3">
@@ -313,112 +453,322 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
             </div>
           )}
 
-          <div className="space-y-4">
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Nome da Tabela de Destino:
-                </label>
-                {isLoadingTables ? (
-                  <div className="text-xs text-slate-500 flex items-center gap-2 py-2">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Carregando tabelas do banco...
-                  </div>
-                ) : tables.length > 0 ? (
-                  <div className="flex gap-2">
-                    <select
-                      value={selectedTable}
-                      onChange={(e) => handleSelectTable(e.target.value)}
-                      className="w-1/2 text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 font-medium"
-                    >
-                      {tables.map(t => (
-                        <option key={t.name} value={t.name}>{t.name} ({t.columns?.length || 0} colunas)</option>
-                      ))}
-                      <option value="custom">-- Digitar Nome Manualmente --</option>
-                    </select>
-                    {selectedTable === 'custom' && (
-                      <input
-                        type="text"
-                        value={customTableName}
-                        onChange={(e) => setCustomTableName(e.target.value)}
-                        placeholder="Nome exato da tabela"
-                        className="w-1/2 text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 font-mono"
-                      />
-                    )}
-                  </div>
-                ) : (
-                  <input
-                    type="text"
-                    value={customTableName}
-                    onChange={(e) => {
-                      setCustomTableName(e.target.value);
-                      setSelectedTable('custom');
-                    }}
-                    placeholder="Nome exato da tabela"
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 font-mono"
-                  />
-                )}
-              </div>
-
-              {/* Checkbox for clearing existing table data */}
-              <div className="pt-2 border-t border-slate-200">
-                <label className="flex items-center gap-2.5 text-xs text-slate-700 font-semibold cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={clearExistingData}
-                    onChange={(e) => setClearExistingData(e.target.checked)}
-                    className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
-                  />
-                  <span>Excluir os dados atuais desta tabela antes de enviar os novos registros (Sobrescrever)</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <div className="bg-slate-100 px-4 py-2 border-b border-slate-200 text-xs font-bold text-slate-700 grid grid-cols-12 gap-4">
-                <div className="col-span-6">Coluna no App</div>
-                <div className="col-span-1 text-center"></div>
-                <div className="col-span-5">Coluna no Supabase</div>
-              </div>
-              <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 bg-white">
-                {columnMappings.map(mapItem => (
-                  <div key={mapItem.appColumn} className="px-4 py-2 text-xs grid grid-cols-12 gap-4 items-center hover:bg-slate-50 transition-colors">
-                    <div className="col-span-6 font-medium text-slate-700 truncate" title={mapItem.appColumn}>
-                      {mapItem.appColumn}
-                    </div>
-                    <div className="col-span-1 flex justify-center text-slate-300">
-                      →
-                    </div>
-                    <div className="col-span-5">
-                      {tableColumns.length > 0 ? (
-                        <select
-                          value={mapItem.supabaseColumn}
-                          onChange={(e) => handleMappingChange(mapItem.appColumn, e.target.value)}
-                          className="w-full text-xs px-2 py-1.5 border border-slate-300 rounded-md outline-none focus:border-emerald-500 font-mono bg-white"
-                        >
-                          <option value="-- IG NORAR --" className="text-slate-400 italic">-- NÃO ENVIAR (Ignorar) --</option>
-                          {tableColumns.map(col => (
-                            <option key={col} value={col}>{col}</option>
-                          ))}
-                          {!tableColumns.includes(mapItem.supabaseColumn) && mapItem.supabaseColumn !== '-- IG NORAR --' && (
-                            <option value={mapItem.supabaseColumn}>{mapItem.supabaseColumn}</option>
-                          )}
-                        </select>
-                      ) : (
-                        <input
-                          type="text"
-                          value={mapItem.supabaseColumn}
-                          onChange={(e) => handleMappingChange(mapItem.appColumn, e.target.value)}
-                          placeholder="Nome da coluna"
-                          className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 font-mono"
-                        />
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+          {/* Destination Table Selection */}
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center gap-1.5">
+                <Table className="w-4 h-4 text-emerald-600" />
+                <span>Tabela de Destino no Supabase:</span>
+              </label>
+              {isLoadingTables ? (
+                <div className="text-xs text-slate-500 flex items-center gap-2 py-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" /> Carregando tabelas do banco...
+                </div>
+              ) : tables.length > 0 ? (
+                <div className="flex gap-2">
+                  <select
+                    value={selectedTable}
+                    onChange={(e) => handleSelectTable(e.target.value)}
+                    className="w-1/2 text-xs px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 font-medium bg-white shadow-sm"
+                  >
+                    {tables.map(t => (
+                      <option key={t.name} value={t.name}>{t.name} ({t.columns?.length || 0} colunas mapeadas)</option>
+                    ))}
+                    <option value="custom">-- Digitar Nome Manualmente --</option>
+                  </select>
+                  {selectedTable === 'custom' && (
+                    <input
+                      type="text"
+                      value={customTableName}
+                      onChange={(e) => setCustomTableName(e.target.value)}
+                      placeholder="Nome exato da tabela no Supabase"
+                      className="w-1/2 text-xs px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 font-mono bg-white shadow-sm"
+                    />
+                  )}
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  value={customTableName}
+                  onChange={(e) => {
+                    setCustomTableName(e.target.value);
+                    setSelectedTable('custom');
+                  }}
+                  placeholder="Nome exato da tabela no Supabase (ex: base_esteiras)"
+                  className="w-full text-xs px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 font-mono bg-white shadow-sm"
+                />
+              )}
             </div>
           </div>
 
+          {/* Database Cleaning Strategy Section */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Filter className="w-4 h-4 text-indigo-600" />
+                <span>Opções de Limpeza de Base (Antes de Subir os Dados)</span>
+              </label>
+              <span className="text-[10px] text-slate-500 font-medium">Escolha como tratar os registros existentes no banco</span>
+            </div>
+
+            {/* Mode selection radio cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+              
+              {/* Option 1: No cleaning */}
+              <label
+                onClick={() => setCleanupMode('none')}
+                className={`flex flex-col p-3 rounded-xl border cursor-pointer transition-all select-none ${
+                  cleanupMode === 'none'
+                    ? 'border-emerald-500 bg-emerald-50/50 shadow-sm ring-1 ring-emerald-500'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <input
+                    type="radio"
+                    name="cleanupMode"
+                    checked={cleanupMode === 'none'}
+                    onChange={() => setCleanupMode('none')}
+                    className="text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs font-bold text-slate-800">Apenas Inserir</span>
+                </div>
+                <p className="text-[11px] text-slate-500 leading-snug pl-5">
+                  Mantém todos os dados atuais da tabela e anexa os novos registros.
+                </p>
+              </label>
+
+              {/* Option 2: Date Period Cleaning */}
+              <label
+                onClick={() => setCleanupMode('period')}
+                className={`flex flex-col p-3 rounded-xl border cursor-pointer transition-all select-none ${
+                  cleanupMode === 'period'
+                    ? 'border-amber-500 bg-amber-50/50 shadow-sm ring-1 ring-amber-500'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <input
+                    type="radio"
+                    name="cleanupMode"
+                    checked={cleanupMode === 'period'}
+                    onChange={() => setCleanupMode('period')}
+                    className="text-amber-600 focus:ring-amber-500"
+                  />
+                  <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Limpar por Período</span>
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 leading-snug pl-5">
+                  Exclui apenas os dados do intervalo de datas selecionado antes de subir.
+                </p>
+              </label>
+
+              {/* Option 3: Full Clean (Overwrite) */}
+              <label
+                onClick={() => setCleanupMode('all')}
+                className={`flex flex-col p-3 rounded-xl border cursor-pointer transition-all select-none ${
+                  cleanupMode === 'all'
+                    ? 'border-rose-500 bg-rose-50/50 shadow-sm ring-1 ring-rose-500'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <input
+                    type="radio"
+                    name="cleanupMode"
+                    checked={cleanupMode === 'all'}
+                    onChange={() => setCleanupMode('all')}
+                    className="text-rose-600 focus:ring-rose-500"
+                  />
+                  <span className="text-xs font-bold text-rose-900 flex items-center gap-1">
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Limpar Toda a Tabela</span>
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 leading-snug pl-5">
+                  Apaga todos os registros atuais da tabela (Sobrescrever tudo).
+                </p>
+              </label>
+
+            </div>
+
+            {/* Period Details Sub-Panel (when period mode is active) */}
+            {cleanupMode === 'period' && (
+              <div className="p-4 bg-amber-50/80 rounded-xl border border-amber-200 space-y-3.5 animate-in fade-in slide-in-from-top-2 duration-150">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-amber-200/70">
+                  <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4 text-amber-700" />
+                    <span>Configuração do Intervalo de Limpeza:</span>
+                  </span>
+                  
+                  {/* Quick Shortcuts */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={detectDateRangeFromRecords}
+                      className="px-2 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-md text-[11px] font-semibold transition-colors flex items-center gap-1 shadow-xs"
+                      title="Calcular período automaticamente a partir dos dados da planilha atual"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-600" />
+                      <span>Detectar da Planilha</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSetCurrentMonth}
+                      className="px-2 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-md text-[11px] font-semibold transition-colors shadow-xs"
+                    >
+                      Mês Atual
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSetPreviousMonth}
+                      className="px-2 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-md text-[11px] font-semibold transition-colors shadow-xs"
+                    >
+                      Mês Anterior
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  
+                  {/* Target Date Column in Supabase */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-950 mb-1">
+                      Coluna de Data (no Supabase):
+                    </label>
+                    <input
+                      type="text"
+                      list="supabase-date-cols-list"
+                      value={periodDateColumn}
+                      onChange={(e) => setPeriodDateColumn(e.target.value)}
+                      placeholder="Ex: data"
+                      className="w-full text-xs px-3 py-2 border border-amber-300 rounded-lg outline-none bg-white font-mono font-medium focus:border-amber-500 shadow-sm"
+                    />
+                    <datalist id="supabase-date-cols-list">
+                      <option value="data" />
+                      {tableColumns.map((col, idx) => (
+                        <option key={idx} value={col} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  {/* Start Date */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-950 mb-1">
+                      Data Inicial (Início do Período):
+                    </label>
+                    <input
+                      type="date"
+                      value={periodStartDate}
+                      onChange={(e) => setPeriodStartDate(e.target.value)}
+                      className="w-full text-xs px-3 py-2 border border-amber-300 rounded-lg outline-none bg-white font-medium focus:border-amber-500 shadow-sm"
+                    />
+                  </div>
+
+                  {/* End Date */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-950 mb-1">
+                      Data Final (Fim do Período):
+                    </label>
+                    <input
+                      type="date"
+                      value={periodEndDate}
+                      onChange={(e) => setPeriodEndDate(e.target.value)}
+                      className="w-full text-xs px-3 py-2 border border-amber-300 rounded-lg outline-none bg-white font-medium focus:border-amber-500 shadow-sm"
+                    />
+                  </div>
+
+                </div>
+
+                {/* Explanation Banner */}
+                <div className="flex items-start gap-2 bg-amber-100/60 p-2.5 rounded-lg border border-amber-300/60 text-amber-900 text-[11px] leading-relaxed">
+                  <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                  <div>
+                    Ao prosseguir, todos os registros existentes na tabela{' '}
+                    <span className="font-bold font-mono text-amber-950">
+                      "{selectedTable === 'custom' ? (customTableName || 'tabela_destino') : selectedTable}"
+                    </span>{' '}
+                    onde a coluna{' '}
+                    <span className="font-bold font-mono text-amber-950">"{periodDateColumn || 'data'}"</span>{' '}
+                    estiver entre{' '}
+                    <span className="font-bold text-amber-950">
+                      {periodStartDate ? formatDateDisplayBR(periodStartDate) : 'DD/MM/AAAA'}
+                    </span>{' '}
+                    e{' '}
+                    <span className="font-bold text-amber-950">
+                      {periodEndDate ? formatDateDisplayBR(periodEndDate) : 'DD/MM/AAAA'}
+                    </span>{' '}
+                    serão excluídos do Supabase e, logo em seguida, os novos {recordsToUpload.length} registros serão inseridos.
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {/* Full clean warning notice */}
+            {cleanupMode === 'all' && (
+              <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-rose-900 text-xs flex items-start gap-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="font-bold block mb-0.5">Atenção ao Sobrescrever:</strong>
+                  <span>
+                    Todos os registros salvos na tabela selecionada no Supabase serão permanentemente apagados antes da inserção dos novos registros.
+                  </span>
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* Column Mappings Table */}
+          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="bg-slate-100 px-4 py-2 border-b border-slate-200 text-xs font-bold text-slate-700 grid grid-cols-12 gap-4">
+              <div className="col-span-6">Coluna na Planilha / App</div>
+              <div className="col-span-1 text-center"></div>
+              <div className="col-span-5">Coluna no Supabase</div>
+            </div>
+            <div className="max-h-60 overflow-y-auto divide-y divide-slate-100 bg-white">
+              {columnMappings.map(mapItem => (
+                <div key={mapItem.appColumn} className="px-4 py-2 text-xs grid grid-cols-12 gap-4 items-center hover:bg-slate-50 transition-colors">
+                  <div className="col-span-6 font-medium text-slate-700 truncate" title={mapItem.appColumn}>
+                    {mapItem.appColumn}
+                  </div>
+                  <div className="col-span-1 flex justify-center text-slate-400">
+                    →
+                  </div>
+                  <div className="col-span-5">
+                    {tableColumns.length > 0 ? (
+                      <select
+                        value={mapItem.supabaseColumn}
+                        onChange={(e) => handleMappingChange(mapItem.appColumn, e.target.value)}
+                        className="w-full text-xs px-2 py-1.5 border border-slate-300 rounded-md outline-none focus:border-emerald-500 font-mono bg-white shadow-xs"
+                      >
+                        <option value="-- IG NORAR --" className="text-slate-400 italic">-- NÃO ENVIAR (Ignorar) --</option>
+                        {tableColumns.map(col => (
+                          <option key={col} value={col}>{col}</option>
+                        ))}
+                        {!tableColumns.includes(mapItem.supabaseColumn) && mapItem.supabaseColumn !== '-- IG NORAR --' && (
+                          <option value={mapItem.supabaseColumn}>{mapItem.supabaseColumn}</option>
+                        )}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={mapItem.supabaseColumn}
+                        onChange={(e) => handleMappingChange(mapItem.appColumn, e.target.value)}
+                        placeholder="Nome da coluna"
+                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 font-mono shadow-xs"
+                      />
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Upload Progress Status */}
           {isUploading && (
             <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between text-xs font-bold text-emerald-950">
@@ -437,16 +787,18 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
             </div>
           )}
 
+          {/* Upload Success Feedback */}
           {uploadSuccess && (
             <div className="p-4 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-xl text-xs flex items-start gap-3">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
               <div>
-                <strong className="font-bold text-sm block mb-0.5">Sincronização Concluída!</strong>
+                <strong className="font-bold text-sm block mb-0.5">Sincronização Concluída com Sucesso!</strong>
                 <span>{uploadStatus}</span>
               </div>
             </div>
           )}
 
+          {/* Upload Error Feedback */}
           {uploadError && (
             <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 rounded-xl text-xs flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
@@ -457,6 +809,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
             </div>
           )}
 
+          {/* Footer Actions */}
           <div className="flex items-center justify-end gap-3 pt-2">
             <button onClick={onClose} className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:text-slate-800 transition-colors">
               Cancelar
@@ -464,10 +817,18 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
             <button
               onClick={handleStartUpload}
               disabled={isUploading || recordsToUpload.length === 0}
-              className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center gap-2 shadow-lg shadow-emerald-600/25 transition-all"
+              className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center gap-2 shadow-lg shadow-emerald-600/25 transition-all active:scale-[0.98]"
             >
               <UploadCloud className="w-4 h-4" />
-              <span>{isUploading ? 'Enviando...' : `Subir ${recordsToUpload.length} Registros`}</span>
+              <span>
+                {isUploading 
+                  ? 'Processando...' 
+                  : cleanupMode === 'period'
+                    ? `Limpar Período e Subir ${recordsToUpload.length} Registros`
+                    : cleanupMode === 'all'
+                      ? `Sobrescrever e Subir ${recordsToUpload.length} Registros`
+                      : `Subir ${recordsToUpload.length} Registros`}
+              </span>
             </button>
           </div>
         </div>
@@ -475,3 +836,4 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     </div>
   );
 };
+
