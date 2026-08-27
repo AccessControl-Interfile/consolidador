@@ -115,12 +115,10 @@ export const DataCleaningConfig: React.FC<DataCleaningConfigProps> = ({
     const target = filterPresets.find(p => p.id === presetId);
     if (!target) return;
 
-    if (confirm(`Deseja realmente excluir a configuração de filtros "${target.name}"?`)) {
-      const updated = filterPresets.filter(p => p.id !== presetId);
-      updateAndSaveFilterPresets(updated);
-      if (selectedFilterPresetId === presetId) {
-        setSelectedFilterPresetId('');
-      }
+    const updated = filterPresets.filter(p => p.id !== presetId);
+    updateAndSaveFilterPresets(updated);
+    if (selectedFilterPresetId === presetId) {
+      setSelectedFilterPresetId('');
     }
   };
 
@@ -334,21 +332,33 @@ export const DataCleaningConfig: React.FC<DataCleaningConfigProps> = ({
                         </button>
                       )}
                     </div>
-                    <select
-                      value={selectedFilterPresetId}
-                      onChange={(e) => handleSelectFilterPreset(e.target.value)}
-                      className="w-full text-xs font-semibold px-3 py-2 border border-purple-300 rounded-lg bg-white outline-none focus:border-purple-600 shadow-xs"
-                    >
-                      <option value="">-- Carregar configuração de filtro salva --</option>
-                      {filterPresets.map(preset => {
-                        const ruleCount = preset.rules ? preset.rules.length : (preset.columnFilters ? Object.keys(preset.columnFilters).length : 0);
-                        return (
-                          <option key={preset.id} value={preset.id}>
-                            {preset.name} ({ruleCount} regra(s))
-                          </option>
-                        );
-                      })}
-                    </select>
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedFilterPresetId}
+                        onChange={(e) => handleSelectFilterPreset(e.target.value)}
+                        className="flex-1 text-xs font-semibold px-3 py-2 border border-purple-300 rounded-lg bg-white outline-none focus:border-purple-600 shadow-xs"
+                      >
+                        <option value="">-- Carregar configuração de filtro salva --</option>
+                        {filterPresets.map(preset => {
+                          const ruleCount = preset.rules ? preset.rules.length : (preset.columnFilters ? Object.keys(preset.columnFilters).length : 0);
+                          return (
+                            <option key={preset.id} value={preset.id}>
+                              {preset.name} ({ruleCount} regra(s))
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {selectedFilterPresetId && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteFilterPreset(selectedFilterPresetId, e)}
+                          className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg border border-rose-200 transition-colors shrink-0"
+                          title="Excluir esta configuração de filtros salva"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Logic match selector */}

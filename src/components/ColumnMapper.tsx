@@ -58,11 +58,19 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
       ...deletedColumnNames
     ]));
 
-    // Collect renames for active (non-excluded) columns
+    // Added columns (manually added in Stage 3 with empty source mappings)
+    const addedList = mappings
+      .filter(m => (!m.sourceMappings || m.sourceMappings.length === 0))
+      .map(m => ({
+        targetColumnName: m.targetColumnName.trim(),
+        dataType: m.dataType
+      }));
+
+    // Collect renames for active (non-excluded) columns with source mappings
     const renamesMap = new Map<string, { fromColumn: string; toColumn: string }>();
     mappings.forEach(m => {
       const isExcluded = m.sourceMappings.length > 0 && m.sourceMappings.every(sm => sm.isIgnored);
-      if (!isExcluded) {
+      if (!isExcluded && m.sourceMappings.length > 0) {
         m.sourceMappings.forEach(sm => {
           if (sm.originalHeader && sm.originalHeader.trim() !== '' && sm.originalHeader.trim() !== m.targetColumnName.trim()) {
             const key = sm.originalHeader.trim().toLowerCase();
@@ -77,8 +85,8 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
 
     const renamesList = Array.from(renamesMap.values());
 
-    if (currentExcluded.length === 0 && renamesList.length === 0) {
-      alert('Nenhuma alteração de exclusão ou renomeação para salvar nesta configuração.');
+    if (currentExcluded.length === 0 && renamesList.length === 0 && addedList.length === 0) {
+      alert('Nenhuma alteração de exclusão, renomeação ou nova coluna adicionada para salvar nesta configuração.');
       return;
     }
 
@@ -86,7 +94,8 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
       id: `excl-${Date.now()}`,
       name: newPresetName.trim(),
       excludedColumns: currentExcluded,
-      renames: renamesList
+      renames: renamesList,
+      addedColumns: addedList
     };
 
     const updatedPresets = [...exclusionPresets, newPreset];
@@ -101,12 +110,13 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
     const details = [];
     if (currentExcluded.length > 0) details.push(`${currentExcluded.length} coluna(s) excluída(s)`);
     if (renamesList.length > 0) details.push(`${renamesList.length} renomeação(ões)`);
+    if (addedList.length > 0) details.push(`${addedList.length} nova(s) coluna(s) adicionada(s)`);
     if (details.length > 0) summaryText += ` (${details.join(', ')})`;
 
     alert(summaryText);
   };
 
-  // Apply a selected preset: STEP 1 (Exclusions), then STEP 2 (Renames)
+  // Apply a selected preset: STEP 1 (Exclusions), then STEP 2 (Renames), then STEP 3 (Added Columns)
   const handleApplyPreset = (presetId: string) => {
     setSelectedPresetId(presetId);
     if (!presetId) return;
@@ -148,6 +158,20 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
         }
 
         return group;
+      });
+    }
+
+    // STEP 3: Process added columns THIRD, ensuring any saved custom columns are recreated
+    if (preset.addedColumns && preset.addedColumns.length > 0) {
+      preset.addedColumns.forEach(addedCol => {
+        const exists = updated.some(m => m.targetColumnName.toLowerCase() === addedCol.targetColumnName.toLowerCase());
+        if (!exists) {
+          updated.push({
+            targetColumnName: addedCol.targetColumnName,
+            dataType: addedCol.dataType || 'string',
+            sourceMappings: []
+          });
+        }
       });
     }
 
@@ -311,9 +335,11 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
               {exclusionPresets.map(preset => {
                 const exclCount = preset.excludedColumns?.length || 0;
                 const renCount = preset.renames?.length || 0;
+                const addCount = preset.addedColumns?.length || 0;
                 const info = [];
                 if (exclCount > 0) info.push(`${exclCount} excl.`);
                 if (renCount > 0) info.push(`${renCount} renom.`);
+                if (addCount > 0) info.push(`${addCount} adic.`);
                 const infoStr = info.length > 0 ? info.join(', ') : 'sem regras';
                 return (
                   <option key={preset.id} value={preset.id}>
@@ -327,7 +353,7 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
           <button
             onClick={() => setShowSavePresetModal(true)}
             className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors shadow-sm"
-            title="Salvar quais colunas estão atualmente excluídas e renomeadas"
+            title="Salvar quais colunas estão atualmente excluídas, renomeadas ou adicionadas"
           >
             <Save className="w-3.5 h-3.5" />
             <span>Salvar Configuração Atual</span>
@@ -352,7 +378,7 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Save className="w-4 h-4 text-amber-500" />
-                Salvar Configuração de Exclusão e Renomeação
+                Salvar Configuração de Colunas da Etapa 3
               </h3>
               <button
                 onClick={() => setShowSavePresetModal(false)}
@@ -363,7 +389,7 @@ export const ColumnMapper: React.FC<ColumnMapperProps> = ({
             </div>
 
             <p className="text-xs text-slate-600 mb-4">
-              A configuração atual salvará tanto as <strong>{excludedCount} colunas excluídas</strong> quanto as <strong>renomeações personalizadas</strong>. Ao aplicar no futuro, a regra primeiro excluirá as colunas salvas e, em seguida, executará as renomeações para evitar conflitos de nomes.
+              A configuração atual salvará as <strong>{excludedCount} colunas excluídas</strong>, as <strong>renomeações personalizadas</strong> e quaisquer <strong>novas colunas adicionadas</strong>. Ao aplicar no futuro, a regra excluirá as colunas salvas, executará as renomeações e recriará as novas colunas configuradas.
             </p>
 
             <div className="mb-4">

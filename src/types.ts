@@ -142,11 +142,18 @@ export interface ColumnRenameRule {
   toColumn: string;
 }
 
+export interface AddedColumnRule {
+  targetColumnName: string;
+  dataType: DataType;
+  defaultValue?: string;
+}
+
 export interface ColumnExclusionPreset {
   id: string;
   name: string;
   excludedColumns: string[];
   renames?: ColumnRenameRule[];
+  addedColumns?: AddedColumnRule[];
 }
 
 export interface ColumnMergeRule {

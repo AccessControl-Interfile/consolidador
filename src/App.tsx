@@ -198,21 +198,64 @@ export default function App() {
         if (macro.exclusionPresetId) {
           const excPreset = exclusionPresets.find(p => p.id === macro.exclusionPresetId);
           if (excPreset) {
+            const excludedSet = new Set((excPreset.excludedColumns || []).map(c => c.toLowerCase()));
+
+            // STEP 1: Process exclusions FIRST based on original source headers and target names
             mappings = mappings.map(m => {
-              if (excPreset.excludedColumns.includes(m.targetColumnName)) {
-                return { ...m, sourceMappings: m.sourceMappings.map(sm => ({ ...sm, isIgnored: true })) };
-              }
-              const renameRule = excPreset.renames?.find(r => r.originalName === m.targetColumnName);
-              if (renameRule) {
-                return { ...m, targetColumnName: renameRule.newName };
-              }
-              return m;
+              const isTargetExcluded = m.sourceMappings.length === 0 && excludedSet.has(m.targetColumnName.toLowerCase());
+              const hasExcludedSource = m.sourceMappings.some(sm => excludedSet.has(sm.originalHeader.toLowerCase()));
+              const shouldIgnore = isTargetExcluded || hasExcludedSource || excludedSet.has(m.targetColumnName.toLowerCase());
+
+              return {
+                ...m,
+                sourceMappings: m.sourceMappings.map(sm => ({
+                  ...sm,
+                  isIgnored: shouldIgnore || excludedSet.has(sm.originalHeader.toLowerCase())
+                }))
+              };
             });
+
+            // STEP 2: Process renames
+            if (excPreset.renames && excPreset.renames.length > 0) {
+              const renameRules = excPreset.renames;
+              mappings = mappings.map(group => {
+                const matchRule = renameRules.find(r => 
+                  group.sourceMappings.some(sm => sm.originalHeader.toLowerCase() === (r.fromColumn || (r as any).originalName || '').toLowerCase()) ||
+                  (r.fromColumn || (r as any).originalName || '').toLowerCase() === group.targetColumnName.toLowerCase()
+                );
+
+                if (matchRule) {
+                  const targetName = matchRule.toColumn || (matchRule as any).newName;
+                  if (targetName) {
+                    return {
+                      ...group,
+                      targetColumnName: targetName
+                    };
+                  }
+                }
+
+                return group;
+              });
+            }
+
+            // STEP 3: Recreate added columns from preset
+            if (excPreset.addedColumns && excPreset.addedColumns.length > 0) {
+              excPreset.addedColumns.forEach(addedCol => {
+                const exists = mappings.some(m => m.targetColumnName.toLowerCase() === addedCol.targetColumnName.toLowerCase());
+                if (!exists) {
+                  mappings.push({
+                    targetColumnName: addedCol.targetColumnName,
+                    dataType: addedCol.dataType || 'string',
+                    sourceMappings: []
+                  });
+                }
+              });
+            }
           }
         }
         setColumnMappings(mappings);
 
-        // 3. Consolidate Base
+        // PASSO 1: Configuração da Etapa 3 (Exclusões, Renomeações, Novas Colunas) e Consolidação
         const activeMappings = mappings.filter(m => !m.sourceMappings.every(sm => sm.isIgnored));
         const fullConfig: ConsolidationConfig = {
           ...cleaningConfig,
@@ -221,7 +264,23 @@ export default function App() {
 
         let { records, summary } = consolidateSheets(sheets, fullConfig, fileName);
 
-        // 3.5. Apply Filter Preset if present
+        // PASSO 2: Unificação de Colunas
+        if (macro.mergePresetId) {
+          const mPreset = mergePresets.find(p => p.id === macro.mergePresetId);
+          if (mPreset && mPreset.rules.length > 0) {
+            records = applyMergeRules(records, mPreset.rules);
+          }
+        }
+
+        // PASSO 3: Substituições Condicionais
+        if (macro.conditionalPresetId) {
+          const cPreset = conditionalPresets.find(p => p.id === macro.conditionalPresetId);
+          if (cPreset && cPreset.rules.length > 0) {
+            records = applyConditionalReplaceRules(records, cPreset.rules);
+          }
+        }
+
+        // PASSO 4: Filtros de Registros
         if (macro.filterPresetId) {
           const fPreset = filterPresets.find(p => p.id === macro.filterPresetId);
           if (fPreset) {
@@ -250,26 +309,10 @@ export default function App() {
           }
         }
 
-        // 4. Apply Merge Preset
-        if (macro.mergePresetId) {
-          const mPreset = mergePresets.find(p => p.id === macro.mergePresetId);
-          if (mPreset && mPreset.rules.length > 0) {
-            records = applyMergeRules(records, mPreset.rules);
-          }
-        }
-
-        // 5. Apply Conditional Replace Preset
-        if (macro.conditionalPresetId) {
-          const cPreset = conditionalPresets.find(p => p.id === macro.conditionalPresetId);
-          if (cPreset && cPreset.rules.length > 0) {
-            records = applyConditionalReplaceRules(records, cPreset.rules);
-          }
-        }
-
         setConsolidatedRecords(records);
         setConsolidationSummary(summary);
         
-        // 6. Apply Grouping Preset
+        // PASSO 5: Agrupamentos
         if (macro.groupingPresetId) {
           setInitialMacroGroupingPresetId(macro.groupingPresetId);
         } else {

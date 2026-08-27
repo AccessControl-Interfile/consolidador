@@ -180,10 +180,6 @@ export const ClearSupabaseTableModal: React.FC<ClearSupabaseTableModalProps> = (
       const startDisplay = formatDateDisplayBR(periodStartDate);
       const endDisplay = formatDateDisplayBR(periodEndDate);
 
-      if (!confirm(`CONFIRMAÇÃO: Deseja realmente excluir todos os registros da tabela "${activeTableName}" no período de ${startDisplay} a ${endDisplay} (coluna "${targetDateCol}")? Esta ação não pode ser desfeita.`)) {
-        return;
-      }
-
       setIsClearing(true);
       setClearStatus(`Excluindo registros no período de ${startDisplay} a ${endDisplay}...`);
       setClearError(null);
@@ -219,10 +215,6 @@ export const ClearSupabaseTableModal: React.FC<ClearSupabaseTableModalProps> = (
       }
     } else {
       // Full clear
-      if (!confirm(`TEM CERTEZA? Isso irá apagar TODOS os registros da tabela "${activeTableName}" no banco de dados. Esta ação não pode ser desfeita.`)) {
-        return;
-      }
-
       setIsClearing(true);
       setClearStatus(`Excluindo todos os dados da tabela "${activeTableName}"...`);
       setClearError(null);

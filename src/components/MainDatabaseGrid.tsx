@@ -123,6 +123,14 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const [isProcessingGrid, setIsProcessingGrid] = useState<boolean>(false);
   const [gridProcessingMessage, setGridProcessingMessage] = useState<string>('Processando dados...');
   const [isExportingExcel, setIsExportingExcel] = useState<boolean>(false);
+  const [ignoreEmptyColumnsOnExport, setIgnoreEmptyColumnsOnExport] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('esteiras_ignore_empty_cols_export');
+      return saved !== null ? JSON.parse(saved) : false;
+    } catch {
+      return false;
+    }
+  });
 
   // Clear Table Modal State
   const [showClearTableModal, setShowClearTableModal] = useState<boolean>(false);
@@ -222,12 +230,10 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     const target = filterPresets.find(p => p.id === presetId);
     if (!target) return;
 
-    if (confirm(`Deseja realmente excluir a configuração de filtros "${target.name}"?`)) {
-      const updated = filterPresets.filter(p => p.id !== presetId);
-      updateAndSaveFilterPresets(updated);
-      if (selectedFilterPresetId === presetId) {
-        setSelectedFilterPresetId('');
-      }
+    const updated = filterPresets.filter(p => p.id !== presetId);
+    updateAndSaveFilterPresets(updated);
+    if (selectedFilterPresetId === presetId) {
+      setSelectedFilterPresetId('');
     }
   };
 
@@ -963,7 +969,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     setGridProcessingMessage('Gerando planilha Excel (.xlsx)...');
     setTimeout(() => {
       try {
-        exportToExcel(dataToExport, summary, filename);
+        exportToExcel(dataToExport, summary, filename, { ignoreEmptyColumns: ignoreEmptyColumnsOnExport });
       } catch (err) {
         console.error(err);
         alert('Erro ao exportar planilha Excel.');
@@ -1126,6 +1132,35 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
 
         {/* Action Buttons: Export Excel & Supabase */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+
+          {/* Option to ignore empty columns on export */}
+          <label
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer transition-colors border select-none ${
+              ignoreEmptyColumnsOnExport
+                ? 'bg-amber-50 text-amber-900 border-amber-300 shadow-xs'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-xs'
+            }`}
+            title="Ao exportar a base para Excel, não inclui colunas onde todas as linhas estejam vazias ou preenchidas apenas com '-'"
+          >
+            <input
+              type="checkbox"
+              checked={ignoreEmptyColumnsOnExport}
+              onChange={(e) => {
+                const val = e.target.checked;
+                setIgnoreEmptyColumnsOnExport(val);
+                try {
+                  localStorage.setItem('esteiras_ignore_empty_cols_export', JSON.stringify(val));
+                } catch (err) {}
+              }}
+              className="w-3.5 h-3.5 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
+            />
+            <span className="flex items-center gap-1">
+              <span>Ignorar colunas sem valor</span>
+              <span className={`text-[10px] ${ignoreEmptyColumnsOnExport ? 'text-amber-700' : 'text-slate-400'} font-normal`}>
+                (vazias / "-")
+              </span>
+            </span>
+          </label>
           
           {/* Back to Step 3 Button */}
           {onBackToStep3 && (
@@ -2180,6 +2215,15 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                       );
                     })}
                   </select>
+                  {selectedFilterPresetId && (
+                    <button
+                      onClick={(e) => handleDeleteFilterPreset(selectedFilterPresetId, e)}
+                      className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg border border-rose-200 transition-colors shrink-0"
+                      title="Excluir esta configuração de filtros salva"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
 
                 {/* Selected Preset Details */}
