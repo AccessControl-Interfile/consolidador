@@ -8,7 +8,7 @@ import {
   ConsolidationFilterRule
 } from '../types';
 
-function evaluateFilterRule(record: ConsolidatedRecord, rule: ConsolidationFilterRule): boolean {
+export function evaluateFilterRule(record: ConsolidatedRecord, rule: ConsolidationFilterRule): boolean {
   if (!rule.column) return true;
 
   const targetValue = rule.value ? rule.value.trim().toLowerCase() : '';
@@ -69,7 +69,7 @@ function evaluateFilterRule(record: ConsolidatedRecord, rule: ConsolidationFilte
   return checkSingle(cellValues[0] || '');
 }
 
-function passesFilterConfig(record: ConsolidatedRecord, filterConfig?: ConsolidationFilterConfig): boolean {
+export function passesFilterConfig(record: ConsolidatedRecord, filterConfig?: ConsolidationFilterConfig): boolean {
   if (!filterConfig || !filterConfig.enabled || !filterConfig.rules || filterConfig.rules.length === 0) {
     return true;
   }

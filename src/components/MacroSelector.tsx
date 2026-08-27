@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MacroPreset, ColumnMergePreset, GroupingPreset, ConditionalReplacePreset, ColumnExclusionPreset } from '../types';
+import { MacroPreset, ColumnMergePreset, GroupingPreset, ConditionalReplacePreset, ColumnExclusionPreset, FilterPreset } from '../types';
 import { Layers, Plus, Trash2, Play, Settings2, BookmarkPlus } from 'lucide-react';
 import { saveToFirebase, loadFromFirebase } from '../lib/firebase';
 
@@ -12,6 +12,7 @@ interface MacroSelectorProps {
   mergePresets: ColumnMergePreset[];
   conditionalPresets: ConditionalReplacePreset[];
   groupingPresets: GroupingPreset[];
+  filterPresets?: FilterPreset[];
 }
 
 export const MacroSelector: React.FC<MacroSelectorProps> = ({
@@ -19,7 +20,8 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
   exclusionPresets,
   mergePresets,
   conditionalPresets,
-  groupingPresets
+  groupingPresets,
+  filterPresets = []
 }) => {
   const [macros, setMacros] = useState<MacroPreset[]>([]);
   const [showMacroForm, setShowMacroForm] = useState(false);
@@ -30,6 +32,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
   const [draftMergeId, setDraftMergeId] = useState('');
   const [draftConditionalId, setDraftConditionalId] = useState('');
   const [draftGroupingId, setDraftGroupingId] = useState('');
+  const [draftFilterId, setDraftFilterId] = useState('');
 
   useEffect(() => {
     const loadMacros = async () => {
@@ -62,7 +65,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
       return;
     }
     
-    if (!draftExclusionId && !draftMergeId && !draftConditionalId && !draftGroupingId) {
+    if (!draftExclusionId && !draftMergeId && !draftConditionalId && !draftGroupingId && !draftFilterId) {
       alert('Selecione pelo menos uma configuração para formar a combinação.');
       return;
     }
@@ -74,6 +77,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
       mergePresetId: draftMergeId || undefined,
       conditionalPresetId: draftConditionalId || undefined,
       groupingPresetId: draftGroupingId || undefined,
+      filterPresetId: draftFilterId || undefined,
     };
 
     saveMacros([...macros, newMacro]);
@@ -82,6 +86,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
     setDraftMergeId('');
     setDraftConditionalId('');
     setDraftGroupingId('');
+    setDraftFilterId('');
     setShowMacroForm(false);
   };
 
@@ -100,7 +105,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
             Macros / Combinações de Configurações
           </h3>
           <p className="text-xs text-indigo-700/80 mt-1">
-            Execute uma sequência de configurações cadastradas (Limpeza, Unificação, Condicionais e Agrupamento) de uma só vez e vá direto para a base final.
+            Execute uma sequência de configurações cadastradas (Limpeza, Filtros, Unificação, Condicionais e Agrupamento) de uma só vez e vá direto para a base final.
           </p>
         </div>
         <button
@@ -125,7 +130,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">1. Exclusão de Colunas (Etapa 3)</label>
               <select value={draftExclusionId} onChange={(e) => setDraftExclusionId(e.target.value)} className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white">
@@ -134,21 +139,28 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">2. Unificação de Colunas (Etapa 4)</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">2. Filtros de Registros (Salvos)</label>
+              <select value={draftFilterId} onChange={(e) => setDraftFilterId(e.target.value)} className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white">
+                <option value="">-- Ignorar --</option>
+                {filterPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">3. Unificação de Colunas (Etapa 4)</label>
               <select value={draftMergeId} onChange={(e) => setDraftMergeId(e.target.value)} className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white">
                 <option value="">-- Ignorar --</option>
                 {mergePresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">3. Substituições Condicionais (Etapa 4)</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">4. Substituições Condicionais (Etapa 4)</label>
               <select value={draftConditionalId} onChange={(e) => setDraftConditionalId(e.target.value)} className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white">
                 <option value="">-- Ignorar --</option>
                 {conditionalPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">4. Agrupamento (Etapa 4)</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">5. Agrupamento (Etapa 4)</label>
               <select value={draftGroupingId} onChange={(e) => setDraftGroupingId(e.target.value)} className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none bg-white">
                 <option value="">-- Ignorar --</option>
                 {groupingPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -181,6 +193,7 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
                 </div>
                 <div className="mt-2 space-y-1">
                   <div className="text-[10px] text-slate-500 flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-slate-300"></span> Exclusão: {macro.exclusionPresetId ? 'Sim' : 'Não'}</div>
+                  <div className="text-[10px] text-slate-500 flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-slate-300"></span> Filtros: {macro.filterPresetId ? 'Sim' : 'Não'}</div>
                   <div className="text-[10px] text-slate-500 flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-slate-300"></span> Unificação: {macro.mergePresetId ? 'Sim' : 'Não'}</div>
                   <div className="text-[10px] text-slate-500 flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-slate-300"></span> Condicional: {macro.conditionalPresetId ? 'Sim' : 'Não'}</div>
                   <div className="text-[10px] text-slate-500 flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-slate-300"></span> Agrupamento: {macro.groupingPresetId ? 'Sim' : 'Não'}</div>

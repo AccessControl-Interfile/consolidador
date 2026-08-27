@@ -64,6 +64,8 @@ export const applyConditionalReplaceRules = (records: ConsolidatedRecord[], rule
             return condValStr.toLowerCase() !== targetCondVal.toLowerCase();
           case 'contains':
             return condValStr.toLowerCase().includes(targetCondVal.toLowerCase());
+          case 'not_contains':
+            return !condValStr.toLowerCase().includes(targetCondVal.toLowerCase());
           case 'starts_with':
             return condValStr.toLowerCase().startsWith(targetCondVal.toLowerCase());
           case 'ends_with':

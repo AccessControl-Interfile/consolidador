@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { EsteiraSheet, MacroPreset, ColumnMergePreset, GroupingPreset, ConditionalReplacePreset, ColumnExclusionPreset } from '../types';
+import { EsteiraSheet, MacroPreset, ColumnMergePreset, GroupingPreset, ConditionalReplacePreset, ColumnExclusionPreset, FilterPreset } from '../types';
 import { Layers, CheckSquare, Square, Eye, ArrowRight, Table, AlertTriangle, FileCheck, RotateCcw, Trash2 } from 'lucide-react';
 import { MacroSelector } from './MacroSelector';
 
@@ -16,6 +16,7 @@ interface SheetSelectorProps {
   mergePresets: ColumnMergePreset[];
   conditionalPresets: ConditionalReplacePreset[];
   groupingPresets: GroupingPreset[];
+  filterPresets?: FilterPreset[];
 }
 
 export const SheetSelector: React.FC<SheetSelectorProps> = ({
@@ -28,7 +29,8 @@ export const SheetSelector: React.FC<SheetSelectorProps> = ({
   exclusionPresets,
   mergePresets,
   conditionalPresets,
-  groupingPresets
+  groupingPresets,
+  filterPresets = []
 }) => {
   const [previewSheet, setPreviewSheet] = useState<EsteiraSheet | null>(null);
 
@@ -226,6 +228,7 @@ export const SheetSelector: React.FC<SheetSelectorProps> = ({
           mergePresets={mergePresets}
           conditionalPresets={conditionalPresets}
           groupingPresets={groupingPresets}
+          filterPresets={filterPresets}
         />
       )}
 

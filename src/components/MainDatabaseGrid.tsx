@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ConsolidatedRecord, ConsolidationSummary, ColumnMergePreset, ColumnMergeRule, GroupingPreset, ConditionalReplaceRule, ConditionalReplacePreset, ReplaceConditionOperator, ConditionClause } from '../types';
+import { ConsolidatedRecord, ConsolidationSummary, ColumnMergePreset, ColumnMergeRule, GroupingPreset, ConditionalReplaceRule, ConditionalReplacePreset, ReplaceConditionOperator, ConditionClause, FilterPreset } from '../types';
 import {
   Download, ArrowUpDown, ChevronLeft, ChevronRight, ArrowLeft,
   Eye, Edit3, Trash2, Plus, FileSpreadsheet, Check, X,
-  SlidersHorizontal, Layers, Merge, Save, BookmarkPlus, Edit, FolderOpen, RotateCcw, Replace, Database, UploadCloud, Filter, Search, RefreshCw
+  SlidersHorizontal, Layers, Merge, Save, BookmarkPlus, Edit, FolderOpen, RotateCcw, Replace, Database, UploadCloud, Filter, Search, RefreshCw, ListFilter
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exporter';
 import { SupabaseModal } from './SupabaseModal';
@@ -25,6 +25,7 @@ interface MainDatabaseGridProps {
 const MERGE_STORAGE_KEY = 'esteiras_merge_presets';
 const GROUPING_STORAGE_KEY = 'esteiras_grouping_presets';
 const CONDITIONAL_REPLACE_STORAGE_KEY = 'esteiras_conditional_replace_presets';
+const FILTER_STORAGE_KEY = 'esteiras_filter_presets';
 
 const getInitialPreset = <T,>(key: string): T[] => {
   try {
@@ -109,6 +110,15 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
   const [selectedConditionalPresetId, setSelectedConditionalPresetId] = useState<string>('');
   const [conditionalRules, setConditionalRules] = useState<ConditionalReplaceRule[]>([]);
 
+  // Filter Presets & Modal state
+  const [showFilterModal, setShowFilterModal] = useState<boolean>(false);
+  const [filterPresets, setFilterPresets] = useState<FilterPreset[]>(() => getInitialPreset<FilterPreset>(FILTER_STORAGE_KEY));
+  const [selectedFilterPresetId, setSelectedFilterPresetId] = useState<string>('');
+  const [filterPresetSaveName, setFilterPresetSaveName] = useState<string>('');
+  const [modalQuickCol, setModalQuickCol] = useState<string>('');
+  const [modalQuickSearch, setModalQuickSearch] = useState<string>('');
+  const [modalQuickPending, setModalQuickPending] = useState<Set<string>>(new Set());
+
   // Processing & Exporting Loading States
   const [isProcessingGrid, setIsProcessingGrid] = useState<boolean>(false);
   const [gridProcessingMessage, setGridProcessingMessage] = useState<string>('Processando dados...');
@@ -151,6 +161,91 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     saveToFirebase(CONDITIONAL_REPLACE_STORAGE_KEY, updated);
   };
 
+  const updateAndSaveFilterPresets = (updated: FilterPreset[]) => {
+    setFilterPresets(updated);
+    try {
+      localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+    saveToFirebase(FILTER_STORAGE_KEY, updated);
+  };
+
+  const handleSaveFilterPreset = () => {
+    if (!filterPresetSaveName.trim()) {
+      alert('Informe um nome para salvar esta configuração de filtros.');
+      return;
+    }
+
+    const activeEntries = (Object.entries(columnFilters) as [string, Set<string>][]).filter(([_, set]) => set && set.size > 0);
+    if (activeEntries.length === 0) {
+      alert('Nenhum filtro está ativo no momento. Defina ao menos um filtro em alguma coluna antes de salvar.');
+      return;
+    }
+
+    const serialized: Record<string, string[]> = {};
+    activeEntries.forEach(([col, set]) => {
+      serialized[col] = Array.from(set);
+    });
+
+    const newPreset: FilterPreset = {
+      id: `filter-${Date.now()}`,
+      name: filterPresetSaveName.trim(),
+      columnFilters: serialized
+    };
+
+    const updated = [...filterPresets, newPreset];
+    updateAndSaveFilterPresets(updated);
+    setSelectedFilterPresetId(newPreset.id);
+    setFilterPresetSaveName('');
+    alert(`Configuração de filtros "${newPreset.name}" salva com sucesso!`);
+  };
+
+  const handleSelectFilterPreset = (presetId: string) => {
+    setSelectedFilterPresetId(presetId);
+    if (!presetId) return;
+
+    const preset = filterPresets.find(p => p.id === presetId);
+    if (preset && preset.columnFilters) {
+      const deserialized: Record<string, Set<string>> = {};
+      Object.entries(preset.columnFilters).forEach(([col, valArr]) => {
+        if (Array.isArray(valArr) && valArr.length > 0) {
+          deserialized[col] = new Set(valArr);
+        }
+      });
+      setColumnFilters(deserialized);
+      setCurrentPage(1);
+    }
+  };
+
+  const handleDeleteFilterPreset = (presetId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!presetId) return;
+    const target = filterPresets.find(p => p.id === presetId);
+    if (!target) return;
+
+    if (confirm(`Deseja realmente excluir a configuração de filtros "${target.name}"?`)) {
+      const updated = filterPresets.filter(p => p.id !== presetId);
+      updateAndSaveFilterPresets(updated);
+      if (selectedFilterPresetId === presetId) {
+        setSelectedFilterPresetId('');
+      }
+    }
+  };
+
+  const handleClearAllColumnFilters = () => {
+    setColumnFilters({});
+    setCurrentPage(1);
+    setSelectedFilterPresetId('');
+  };
+
+  const handleRemoveSingleColumnFilter = (col: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      delete next[col];
+      return next;
+    });
+    setCurrentPage(1);
+  };
+
   const handleAddConditionClause = () => {
     setDraftConditions(prev => [
       ...prev,
@@ -167,7 +262,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
     setDraftConditions(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
   };
 
-  // Sync saved merge, grouping & conditional presets with Firebase
+  // Sync saved merge, grouping, conditional & filter presets with Firebase
   useEffect(() => {
     const loadAllPresets = async () => {
       try {
@@ -185,6 +280,11 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
         if (savedConditional && Array.isArray(savedConditional) && savedConditional.length > 0) {
           setConditionalPresets(savedConditional);
           localStorage.setItem(CONDITIONAL_REPLACE_STORAGE_KEY, JSON.stringify(savedConditional));
+        }
+        const savedFilters = await loadFromFirebase<FilterPreset[]>(FILTER_STORAGE_KEY);
+        if (savedFilters && Array.isArray(savedFilters) && savedFilters.length > 0) {
+          setFilterPresets(savedFilters);
+          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(savedFilters));
         }
       } catch (e) {
         console.error('Failed to load presets from Firebase', e);
@@ -688,7 +788,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
         alert(`Selecione a coluna da Condição ${i + 1}.`);
         return;
       }
-      if (['equals', 'not_equals', 'contains', 'starts_with', 'ends_with'].includes(cond.operator) && !cond.conditionValue.trim()) {
+      if (['equals', 'not_equals', 'contains', 'not_contains', 'starts_with', 'ends_with'].includes(cond.operator) && !cond.conditionValue.trim()) {
         alert(`Informe o valor de comparação na Condição ${i + 1} (${cond.conditionColumn}).`);
         return;
       }
@@ -809,6 +909,8 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                 return condValStr.toLowerCase() !== targetCondVal.toLowerCase();
               case 'contains':
                 return condValStr.toLowerCase().includes(targetCondVal.toLowerCase());
+              case 'not_contains':
+                return !condValStr.toLowerCase().includes(targetCondVal.toLowerCase());
               case 'starts_with':
                 return condValStr.toLowerCase().startsWith(targetCondVal.toLowerCase());
               case 'ends_with':
@@ -932,6 +1034,29 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
               </div>
             )}
           </div>
+
+          {/* Filter Presets & Rules Button */}
+          <button
+            onClick={() => setShowFilterModal(true)}
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-xl transition-all shadow-md ${
+              Object.keys(columnFilters).length > 0
+                ? 'bg-blue-700 text-white shadow-blue-700/20 ring-2 ring-blue-300'
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'
+            }`}
+            title="Configurar, carregar e salvar filtros da base consolidada"
+          >
+            <Filter className="w-3.5 h-3.5 text-blue-200" />
+            <span>
+              {Object.keys(columnFilters).length > 0
+                ? `Filtros Ativos (${Object.keys(columnFilters).length})`
+                : 'Filtros da Base'}
+            </span>
+            {filterPresets.length > 0 && (
+              <span className="bg-blue-900/80 text-blue-100 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                {filterPresets.length} salvos
+              </span>
+            )}
+          </button>
 
           {/* Merge / Unify Columns Button */}
           <button
@@ -1768,6 +1893,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                               <option value="equals">For igual a</option>
                               <option value="not_equals">For diferente de</option>
                               <option value="contains">Contiver o texto</option>
+                              <option value="not_contains">Não contiver o texto</option>
                               <option value="starts_with">Começar com</option>
                               <option value="ends_with">Terminar com</option>
                               <option value="is_empty">Estiver em branco / nulo</option>
@@ -1893,6 +2019,7 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                         equals: 'for igual a',
                         not_equals: 'for diferente de',
                         contains: 'contiver',
+                        not_contains: 'não contiver',
                         starts_with: 'começar com',
                         ends_with: 'terminar com',
                         is_empty: 'estiver em branco',
@@ -1987,6 +2114,354 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
               >
                 <Replace className="w-3.5 h-3.5" />
                 <span>Aplicar {conditionalRules.length} Regra(s) na Base</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filter Presets & Rules Modal */}
+      {showFilterModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 bg-blue-950 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/30 text-blue-200 flex items-center justify-center">
+                  <Filter className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Configurações de Filtros da Base</h3>
+                  <p className="text-xs text-blue-200">
+                    Salve e carregue combinações de filtros por coluna para reutilização imediata na base e em macros.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowFilterModal(false)}
+                className="p-1 hover:bg-blue-800 rounded-lg text-blue-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 overflow-y-auto max-h-[75vh]">
+              {/* Presets dropdown */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                <label className="block text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <FolderOpen className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Configurações de Filtros Salvas:</span>
+                  </span>
+                  {selectedFilterPresetId && (
+                    <button
+                      onClick={(e) => handleDeleteFilterPreset(selectedFilterPresetId, e)}
+                      className="text-[11px] text-rose-600 hover:underline font-semibold flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Excluir Configuração Salva</span>
+                    </button>
+                  )}
+                </label>
+                
+                <div className="flex gap-2">
+                  <select
+                    value={selectedFilterPresetId}
+                    onChange={(e) => handleSelectFilterPreset(e.target.value)}
+                    className="flex-1 text-xs font-semibold px-3 py-2 border border-slate-300 rounded-lg bg-white outline-none focus:border-blue-500 shadow-sm"
+                  >
+                    <option value="">-- Selecione uma configuração de filtro salva --</option>
+                    {filterPresets.map(preset => {
+                      const filterCount = preset.columnFilters ? Object.keys(preset.columnFilters).length : 0;
+                      return (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name} ({filterCount} coluna(s) filtrada(s))
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {/* Selected Preset Details */}
+                {selectedFilterPresetId && (() => {
+                  const p = filterPresets.find(item => item.id === selectedFilterPresetId);
+                  if (!p || !p.columnFilters) return null;
+                  const entries = Object.entries(p.columnFilters) as [string, string[]][];
+                  return (
+                    <div className="p-2.5 bg-blue-50/70 rounded-lg border border-blue-200 text-xs space-y-1.5">
+                      <div className="font-bold text-blue-900 flex items-center justify-between">
+                        <span>Colunas filtradas nesta configuração:</span>
+                        <span className="text-[10px] text-blue-700 font-mono">{entries.length} coluna(s)</span>
+                      </div>
+                      <div className="space-y-1">
+                        {entries.map(([col, vals]) => (
+                          <div key={col} className="flex flex-wrap items-center gap-1.5 text-[11px] text-blue-800">
+                            <strong className="font-semibold text-slate-800">{col}:</strong>
+                            <div className="flex flex-wrap gap-1">
+                              {(vals || []).map((v, vIdx) => (
+                                <span key={vIdx} className="px-1.5 py-0.5 bg-white border border-blue-200 rounded text-slate-700 font-mono text-[10px]">
+                                  {v || '(Vazio)'}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Active Column Filters Breakdown */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                    <ListFilter className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Filtros Atualmente Ativos na Base ({Object.keys(columnFilters).length}):</span>
+                  </span>
+                  {Object.keys(columnFilters).length > 0 && (
+                    <button
+                      onClick={handleClearAllColumnFilters}
+                      className="text-[11px] text-rose-600 hover:text-rose-700 font-semibold hover:underline flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Limpar Todos os Filtros</span>
+                    </button>
+                  )}
+                </div>
+
+                {Object.keys(columnFilters).length === 0 ? (
+                  <div className="p-4 bg-white rounded-lg border border-dashed border-slate-300 text-center">
+                    <p className="text-xs text-slate-500 font-medium">
+                      Nenhum filtro está ativo no momento. Use os ícones de filtro nos cabeçalhos das colunas da tabela ou selecione um filtro rápido abaixo.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-52 overflow-y-auto">
+                    {(Object.entries(columnFilters) as [string, Set<string>][]).map(([col, valSet]) => {
+                      const valsArray = Array.from(valSet);
+                      const totalUnique = getUniqueValuesForColumn(col).length;
+                      return (
+                        <div key={col} className="p-2.5 bg-white rounded-lg border border-slate-200 flex items-start justify-between gap-2">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-800">{col}</span>
+                              <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full font-semibold">
+                                {valsArray.length} de {totalUnique} valores permitidos
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {valsArray.slice(0, 10).map((v, i) => (
+                                <span key={i} className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-slate-600 text-[10px]">
+                                  {v || '(Vazio)'}
+                                </span>
+                              ))}
+                              {valsArray.length > 10 && (
+                                <span className="text-[10px] text-slate-400 font-medium italic">
+                                  +{valsArray.length - 10} outros
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveSingleColumnFilter(col)}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                            title={`Remover filtro da coluna ${col}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Column Filter Editor inside Modal */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="text-xs font-bold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
+                  <span>Adicionar / Modificar Filtro de Coluna:</span>
+                  {modalQuickCol && (
+                    <button
+                      onClick={() => {
+                        setModalQuickCol('');
+                        setModalQuickSearch('');
+                        setModalQuickPending(new Set());
+                      }}
+                      className="text-[11px] text-slate-500 hover:text-slate-700"
+                    >
+                      Limpar Seleção
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      1. Selecione a Coluna:
+                    </label>
+                    <select
+                      value={modalQuickCol}
+                      onChange={(e) => {
+                        const col = e.target.value;
+                        setModalQuickCol(col);
+                        setModalQuickSearch('');
+                        if (col) {
+                          const existingSet = columnFilters[col];
+                          if (existingSet) {
+                            setModalQuickPending(new Set(existingSet));
+                          } else {
+                            setModalQuickPending(new Set(getUniqueValuesForColumn(col)));
+                          }
+                        } else {
+                          setModalQuickPending(new Set());
+                        }
+                      }}
+                      className="w-full text-xs font-medium px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-blue-500 bg-white shadow-sm"
+                    >
+                      <option value="">-- Escolha uma coluna da base --</option>
+                      {allColumns.map((col, idx) => (
+                        <option key={idx} value={col}>
+                          {col} {columnFilters[col] ? `(Filtro Ativo: ${columnFilters[col].size} selecionados)` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {modalQuickCol && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        2. Buscar Valores:
+                      </label>
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={modalQuickSearch}
+                          onChange={(e) => setModalQuickSearch(e.target.value)}
+                          placeholder="Filtrar valores..."
+                          className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded-lg outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {modalQuickCol && (() => {
+                  const uniqueVals = getUniqueValuesForColumn(modalQuickCol);
+                  const filteredVals = uniqueVals.filter(v => v.toLowerCase().includes(modalQuickSearch.toLowerCase()));
+                  return (
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <div className="flex items-center justify-between text-xs px-1">
+                        <label className="flex items-center gap-2 font-bold text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={modalQuickPending.size === uniqueVals.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setModalQuickPending(new Set(uniqueVals));
+                              } else {
+                                setModalQuickPending(new Set());
+                              }
+                            }}
+                            className="w-3.5 h-3.5 text-blue-600 rounded"
+                          />
+                          <span>Selecionar Todos ({uniqueVals.length} valores)</span>
+                        </label>
+                        <span className="text-slate-500 font-medium text-[11px]">
+                          {modalQuickPending.size} de {uniqueVals.length} selecionados
+                        </span>
+                      </div>
+
+                      <div className="max-h-40 overflow-y-auto p-2 bg-slate-50 rounded-lg border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                        {filteredVals.map((val, idx) => {
+                          const isChecked = modalQuickPending.has(val);
+                          return (
+                            <label key={idx} className="flex items-center gap-2 p-1 hover:bg-white rounded cursor-pointer text-xs">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setModalQuickPending(prev => {
+                                    const next = new Set(prev);
+                                    if (checked) next.add(val);
+                                    else next.delete(val);
+                                    return next;
+                                  });
+                                }}
+                                className="w-3.5 h-3.5 text-blue-600 rounded"
+                              />
+                              <span className="truncate text-slate-700">{val || <em className="text-slate-400">(Vazio)</em>}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex justify-end pt-1">
+                        <button
+                          onClick={() => {
+                            setColumnFilters(prev => {
+                              const next = { ...prev };
+                              if (modalQuickPending.size === uniqueVals.length) {
+                                delete next[modalQuickCol];
+                              } else {
+                                next[modalQuickCol] = modalQuickPending;
+                              }
+                              return next;
+                            });
+                            setCurrentPage(1);
+                            setModalQuickCol('');
+                            setModalQuickSearch('');
+                            setModalQuickPending(new Set());
+                          }}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-sm transition-colors"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Definir Filtro na Coluna</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Save Preset Section */}
+              <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex-1 w-full">
+                  <input
+                    type="text"
+                    value={filterPresetSaveName}
+                    onChange={(e) => setFilterPresetSaveName(e.target.value)}
+                    placeholder="Nome para salvar a configuração de filtros (Ex: Filtro Clientes Ativos SP/RJ)"
+                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg outline-none focus:border-blue-500 shadow-sm"
+                  />
+                </div>
+                <button
+                  onClick={handleSaveFilterPreset}
+                  disabled={Object.keys(columnFilters).length === 0}
+                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shrink-0 transition-colors shadow-sm"
+                  title="Salvar os filtros ativos como uma nova configuração reutilizável"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Salvar Configuração ({Object.keys(columnFilters).length} Filtros)</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-100 border-t border-slate-200 flex items-center justify-between gap-2">
+              <button
+                onClick={handleClearAllColumnFilters}
+                disabled={Object.keys(columnFilters).length === 0}
+                className="px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-40 rounded-xl transition-colors"
+              >
+                Limpar Todos os Filtros
+              </button>
+              <button
+                onClick={() => setShowFilterModal(false)}
+                className="px-5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white rounded-xl shadow-md"
+              >
+                Fechar
               </button>
             </div>
           </div>
@@ -2154,6 +2629,18 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
                               className="flex-1 text-xs text-white bg-blue-600 hover:bg-blue-700 py-1.5 rounded-lg font-bold transition-colors"
                             >
                               Aplicar
+                            </button>
+                          </div>
+                          <div className="px-2 pb-2 bg-slate-50 border-t border-slate-100">
+                            <button
+                              onClick={() => {
+                                setActiveFilterColumn(null);
+                                setShowFilterModal(true);
+                              }}
+                              className="w-full mt-1.5 py-1 text-[11px] text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded flex items-center justify-center gap-1 font-semibold transition-colors"
+                            >
+                              <BookmarkPlus className="w-3 h-3" />
+                              <span>Salvar / Gerenciar Filtros</span>
                             </button>
                           </div>
                         </div>

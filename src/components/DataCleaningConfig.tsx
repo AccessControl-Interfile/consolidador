@@ -1,6 +1,7 @@
-import React from 'react';
-import { ConsolidationConfig, GroupedColumnMapping, ConsolidationFilterRule, ConsolidationFilterOperator } from '../types';
-import { Settings2, ShieldCheck, Sparkles, Filter, Trash2, Calendar, DollarSign, Layers, ArrowRight, Plus, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ConsolidationConfig, GroupedColumnMapping, ConsolidationFilterRule, ConsolidationFilterOperator, FilterPreset } from '../types';
+import { Settings2, ShieldCheck, Sparkles, Filter, Trash2, Calendar, DollarSign, Layers, ArrowRight, Plus, HelpCircle, Save, FolderOpen, BookmarkPlus } from 'lucide-react';
+import { saveToFirebase, loadFromFirebase } from '../lib/firebase';
 
 interface DataCleaningConfigProps {
   config: ConsolidationConfig;
@@ -9,6 +10,8 @@ interface DataCleaningConfigProps {
   onConsolidate: () => void;
   onBack: () => void;
 }
+
+const FILTER_STORAGE_KEY = 'esteiras_filter_presets';
 
 export const DataCleaningConfig: React.FC<DataCleaningConfigProps> = ({
   config,
@@ -25,6 +28,100 @@ export const DataCleaningConfig: React.FC<DataCleaningConfigProps> = ({
     enabled: false,
     matchLogic: 'AND',
     rules: []
+  };
+
+  const [filterPresets, setFilterPresets] = useState<FilterPreset[]>(() => {
+    try {
+      const cached = localStorage.getItem(FILTER_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [selectedFilterPresetId, setSelectedFilterPresetId] = useState<string>('');
+  const [presetSaveName, setPresetSaveName] = useState<string>('');
+
+  useEffect(() => {
+    const loadPresets = async () => {
+      try {
+        const fb = await loadFromFirebase<FilterPreset[]>(FILTER_STORAGE_KEY);
+        if (fb && Array.isArray(fb) && fb.length > 0) {
+          setFilterPresets(fb);
+          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(fb));
+        }
+      } catch (e) {
+        console.error('Error loading filter presets in DataCleaningConfig:', e);
+      }
+    };
+    loadPresets();
+  }, []);
+
+  const updateAndSaveFilterPresets = (updated: FilterPreset[]) => {
+    setFilterPresets(updated);
+    try {
+      localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+    saveToFirebase(FILTER_STORAGE_KEY, updated);
+  };
+
+  const handleSaveFilterPreset = () => {
+    if (!presetSaveName.trim()) {
+      alert('Informe um nome para salvar esta configuração de filtros.');
+      return;
+    }
+    if (filterConfig.rules.length === 0) {
+      alert('Adicione ao menos uma regra de filtro antes de salvar.');
+      return;
+    }
+
+    const newPreset: FilterPreset = {
+      id: `filter-${Date.now()}`,
+      name: presetSaveName.trim(),
+      rules: filterConfig.rules,
+      matchLogic: filterConfig.matchLogic
+    };
+
+    const updated = [...filterPresets, newPreset];
+    updateAndSaveFilterPresets(updated);
+    setSelectedFilterPresetId(newPreset.id);
+    setPresetSaveName('');
+    alert(`Configuração de filtros "${newPreset.name}" salva com sucesso!`);
+  };
+
+  const handleSelectFilterPreset = (presetId: string) => {
+    setSelectedFilterPresetId(presetId);
+    if (!presetId) return;
+
+    const preset = filterPresets.find(p => p.id === presetId);
+    if (preset) {
+      if (preset.rules && preset.rules.length > 0) {
+        onChangeConfig({
+          ...config,
+          filterConfig: {
+            enabled: true,
+            matchLogic: preset.matchLogic || 'AND',
+            rules: preset.rules
+          }
+        });
+      }
+    }
+  };
+
+  const handleDeleteFilterPreset = (presetId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!presetId) return;
+    const target = filterPresets.find(p => p.id === presetId);
+    if (!target) return;
+
+    if (confirm(`Deseja realmente excluir a configuração de filtros "${target.name}"?`)) {
+      const updated = filterPresets.filter(p => p.id !== presetId);
+      updateAndSaveFilterPresets(updated);
+      if (selectedFilterPresetId === presetId) {
+        setSelectedFilterPresetId('');
+      }
+    }
   };
 
   const handleToggleFilter = (enabled: boolean) => {
@@ -219,6 +316,41 @@ export const DataCleaningConfig: React.FC<DataCleaningConfigProps> = ({
 
               {filterConfig.enabled ? (
                 <div className="mt-4 pt-3 border-t border-slate-100 space-y-4">
+                  {/* Saved Filter Presets Dropdown */}
+                  <div className="bg-purple-50/50 p-3 rounded-xl border border-purple-200/70 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-purple-950">
+                      <span className="flex items-center gap-1.5">
+                        <FolderOpen className="w-3.5 h-3.5 text-purple-600" />
+                        <span>Configurações de Filtros Salvas:</span>
+                      </span>
+                      {selectedFilterPresetId && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteFilterPreset(selectedFilterPresetId, e)}
+                          className="text-[11px] text-rose-600 hover:underline font-semibold flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Excluir Configuração</span>
+                        </button>
+                      )}
+                    </div>
+                    <select
+                      value={selectedFilterPresetId}
+                      onChange={(e) => handleSelectFilterPreset(e.target.value)}
+                      className="w-full text-xs font-semibold px-3 py-2 border border-purple-300 rounded-lg bg-white outline-none focus:border-purple-600 shadow-xs"
+                    >
+                      <option value="">-- Carregar configuração de filtro salva --</option>
+                      {filterPresets.map(preset => {
+                        const ruleCount = preset.rules ? preset.rules.length : (preset.columnFilters ? Object.keys(preset.columnFilters).length : 0);
+                        return (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.name} ({ruleCount} regra(s))
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
                   {/* Logic match selector */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-purple-50/60 p-3 rounded-xl border border-purple-100">
                     <span className="text-xs font-bold text-purple-900">
@@ -343,6 +475,29 @@ export const DataCleaningConfig: React.FC<DataCleaningConfigProps> = ({
                     <p className="text-[11px] text-slate-400">
                       * Linhas que não atenderem aos filtros serão ignoradas na consolidação.
                     </p>
+                  </div>
+
+                  {/* Save Filter Preset Box */}
+                  <div className="pt-3 border-t border-purple-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="flex-1 w-full">
+                      <input
+                        type="text"
+                        value={presetSaveName}
+                        onChange={(e) => setPresetSaveName(e.target.value)}
+                        placeholder="Nome para salvar esta configuração de filtros (Ex: Somente Aprovados SP)"
+                        className="w-full text-xs px-3 py-2 border border-purple-200 rounded-lg outline-none focus:border-purple-600 bg-white"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveFilterPreset}
+                      disabled={filterConfig.rules.length === 0}
+                      className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shrink-0 transition-colors shadow-xs"
+                      title="Salvar estas regras de filtro como uma configuração reutilizável"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Salvar Configuração de Filtro</span>
+                    </button>
                   </div>
                 </div>
               ) : (

@@ -3,12 +3,12 @@ import {
   EsteiraSheet, GroupedColumnMapping, ConsolidationConfig,
   ConsolidatedRecord, ConsolidationSummary, HistoryEntry,
   MacroPreset, ColumnExclusionPreset, ColumnMergePreset,
-  ConditionalReplacePreset, GroupingPreset
+  ConditionalReplacePreset, GroupingPreset, FilterPreset
 } from './types';
 import { parseExcelFile } from './utils/excelParser';
 import { createDemoSheets, generateDemoExcelFile } from './utils/demoData';
 import { generateSmartColumnMappings } from './utils/columnMatcher';
-import { consolidateSheets } from './utils/consolidator';
+import { consolidateSheets, passesFilterConfig } from './utils/consolidator';
 import { applyMergeRules, applyConditionalReplaceRules } from './utils/macroProcessor';
 import { Header } from './components/Header';
 import { UploadSection } from './components/UploadSection';
@@ -53,6 +53,7 @@ export default function App() {
   const [mergePresets, setMergePresets] = useState<ColumnMergePreset[]>([]);
   const [conditionalPresets, setConditionalPresets] = useState<ConditionalReplacePreset[]>([]);
   const [groupingPresets, setGroupingPresets] = useState<GroupingPreset[]>([]);
+  const [filterPresets, setFilterPresets] = useState<FilterPreset[]>([]);
   const [initialMacroGroupingPresetId, setInitialMacroGroupingPresetId] = useState<string>('');
 
   useEffect(() => {
@@ -70,6 +71,9 @@ export default function App() {
 
         const p4 = localStorage.getItem('esteiras_grouping_presets');
         if (p4) setGroupingPresets(JSON.parse(p4));
+
+        const p5 = localStorage.getItem('esteiras_filter_presets');
+        if (p5) setFilterPresets(JSON.parse(p5));
       } catch (e) {
         console.error('Error parsing local presets in App:', e);
       }
@@ -87,6 +91,9 @@ export default function App() {
 
         const fb4 = await loadFromFirebase<GroupingPreset[]>('esteiras_grouping_presets');
         if (fb4 && Array.isArray(fb4)) setGroupingPresets(fb4);
+
+        const fb5 = await loadFromFirebase<FilterPreset[]>('esteiras_filter_presets');
+        if (fb5 && Array.isArray(fb5)) setFilterPresets(fb5);
       } catch (e) {
         console.error('Error loading presets from Firebase in App:', e);
       }
@@ -213,6 +220,35 @@ export default function App() {
         };
 
         let { records, summary } = consolidateSheets(sheets, fullConfig, fileName);
+
+        // 3.5. Apply Filter Preset if present
+        if (macro.filterPresetId) {
+          const fPreset = filterPresets.find(p => p.id === macro.filterPresetId);
+          if (fPreset) {
+            if (fPreset.columnFilters && Object.keys(fPreset.columnFilters).length > 0) {
+              const entries = Object.entries(fPreset.columnFilters) as [string, string[]][];
+              records = records.filter(rec => {
+                return entries.every(([col, allowedVals]) => {
+                  if (!allowedVals || !Array.isArray(allowedVals) || allowedVals.length === 0) return true;
+                  const rawVal = rec[col];
+                  const valStr = rawVal !== undefined && rawVal !== null ? String(rawVal).trim() : '';
+                  return allowedVals.includes(valStr);
+                });
+              });
+            }
+            if (fPreset.rules && fPreset.rules.length > 0) {
+              records = records.filter(rec => passesFilterConfig(rec, {
+                enabled: true,
+                matchLogic: fPreset.matchLogic || 'AND',
+                rules: fPreset.rules!
+              }));
+            }
+            summary = {
+              ...summary,
+              totalRecords: records.length
+            };
+          }
+        }
 
         // 4. Apply Merge Preset
         if (macro.mergePresetId) {
@@ -409,6 +445,7 @@ export default function App() {
             mergePresets={mergePresets}
             conditionalPresets={conditionalPresets}
             groupingPresets={groupingPresets}
+            filterPresets={filterPresets}
           />
         )}
 

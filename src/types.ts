@@ -108,6 +108,14 @@ export interface AiAnalysisReport {
   recomendacoes: string[];
 }
 
+export interface FilterPreset {
+  id: string;
+  name: string;
+  columnFilters?: Record<string, string[]>;
+  rules?: ConsolidationFilterRule[];
+  matchLogic?: 'AND' | 'OR';
+}
+
 export interface MacroPreset {
   id: string;
   name: string;
@@ -115,6 +123,7 @@ export interface MacroPreset {
   mergePresetId?: string;
   conditionalPresetId?: string;
   groupingPresetId?: string;
+  filterPresetId?: string;
 }
 
 export interface HistoryEntry {
@@ -161,7 +170,7 @@ export interface GroupingPreset {
   sumColumn?: string;
 }
 
-export type ReplaceConditionOperator = 'equals' | 'not_equals' | 'contains' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'anything';
+export type ReplaceConditionOperator = 'equals' | 'not_equals' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'anything';
 
 export interface ConditionClause {
   id: string;
