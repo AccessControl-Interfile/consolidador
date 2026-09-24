@@ -34,6 +34,9 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
   const [draftFilterId, setDraftFilterId] = useState('');
   const [draftGroupingId, setDraftGroupingId] = useState('');
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+
   useEffect(() => {
     const loadMacros = async () => {
       try {
@@ -49,7 +52,9 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
         const saved = await loadFromFirebase<MacroPreset[]>(MACRO_STORAGE_KEY);
         if (saved !== null && Array.isArray(saved)) {
           setMacros(saved);
-          localStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(saved));
+          try {
+            localStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(saved));
+          } catch (e) {}
         }
       } catch (e) {
         console.error('Failed to load macros', e);
@@ -58,15 +63,25 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
     loadMacros();
   }, []);
 
-  const saveMacros = (newMacros: MacroPreset[]) => {
+  const saveMacros = async (newMacros: MacroPreset[]) => {
     setMacros(newMacros);
     try {
       localStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(newMacros));
     } catch (e) {}
-    saveToFirebase(MACRO_STORAGE_KEY, newMacros);
+    
+    setIsSaving(true);
+    try {
+      await saveToFirebase(MACRO_STORAGE_KEY, newMacros);
+      setSyncStatus('Salvo na nuvem');
+      setTimeout(() => setSyncStatus(null), 2500);
+    } catch (e) {
+      console.error('Error saving macro to Firebase:', e);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleCreateMacro = () => {
+  const handleCreateMacro = async () => {
     if (!draftName.trim()) {
       alert('Dê um nome para a macro.');
       return;
@@ -80,14 +95,14 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
     const newMacro: MacroPreset = {
       id: `macro-${Date.now()}`,
       name: draftName.trim(),
-      exclusionPresetId: draftExclusionId || undefined,
-      mergePresetId: draftMergeId || undefined,
-      conditionalPresetId: draftConditionalId || undefined,
-      filterPresetId: draftFilterId || undefined,
-      groupingPresetId: draftGroupingId || undefined,
+      ...(draftExclusionId ? { exclusionPresetId: draftExclusionId } : {}),
+      ...(draftMergeId ? { mergePresetId: draftMergeId } : {}),
+      ...(draftConditionalId ? { conditionalPresetId: draftConditionalId } : {}),
+      ...(draftFilterId ? { filterPresetId: draftFilterId } : {}),
+      ...(draftGroupingId ? { groupingPresetId: draftGroupingId } : {}),
     };
 
-    saveMacros([...macros, newMacro]);
+    await saveMacros([...macros, newMacro]);
     setDraftName('');
     setDraftExclusionId('');
     setDraftMergeId('');
@@ -97,9 +112,9 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
     setShowMacroForm(false);
   };
 
-  const confirmDeleteMacro = (id: string) => {
+  const confirmDeleteMacro = async (id: string) => {
     const updated = macros.filter(m => m.id !== id);
-    saveMacros(updated);
+    await saveMacros(updated);
     setMacroToDelete(null);
   };
 
@@ -109,7 +124,18 @@ export const MacroSelector: React.FC<MacroSelectorProps> = ({
         <div>
           <h3 className="text-lg font-bold text-indigo-950 flex items-center gap-2">
             <Settings2 className="w-5 h-5 text-indigo-600" />
-            Macros / Combinações de Configurações
+            <span>Macros / Combinações de Configurações</span>
+            {isSaving && (
+              <span className="text-[10px] font-medium text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full animate-pulse">
+                Sincronizando...
+              </span>
+            )}
+            {syncStatus && !isSaving && (
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                <Check className="w-2.5 h-2.5" />
+                {syncStatus}
+              </span>
+            )}
           </h3>
           <p className="text-xs text-indigo-700/80 mt-1">
             Execute uma sequência ordenada de configurações (1. Etapa 3 &rarr; 2. Unificação &rarr; 3. Substituições &rarr; 4. Filtros &rarr; 5. Agrupamentos) de uma só vez e vá direto para a base final.

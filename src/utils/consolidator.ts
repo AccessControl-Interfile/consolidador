@@ -213,6 +213,68 @@ export function parseCurrencyValue(val: any): number | string {
   return isNaN(num) ? val : num;
 }
 
+/**
+ * Converte valores numéricos para o padrão Decimal Americano:
+ * - Remove pontos separadores de milhar ("tirando o ponto")
+ * - Converte a vírgula decimal brasileira para ponto decimal americano ("removendo a vírgula")
+ * - Converte strings formatadas (ex: "1.234,56", "15,50", "1.500,00", "-1.234,56") em número float/inteiro nativo (1234.56, 15.5, 1500, -1234.56)
+ */
+export function parseNumericValue(val: any): number | string {
+  if (val === null || val === undefined || val === '') return '';
+  if (typeof val === 'number') return isNaN(val) ? '' : val;
+
+  let str = String(val).trim();
+  if (!str) return '';
+
+  // Preserve negative sign (supports standard "-" and accounting "(...)")
+  const isNegative = str.startsWith('-') || /^\(.*\)$/.test(str);
+  let cleanStr = str.replace(/[()]/g, '').trim();
+
+  // Strip non-digit characters except commas, dots, and minus
+  cleanStr = cleanStr.replace(/[^\d,.-]/g, '').trim();
+  if (!cleanStr || cleanStr === '-' || cleanStr === '.' || cleanStr === ',') {
+    return val;
+  }
+
+  // Handle conversion to American decimal:
+  // "removendo o ponto de milhar e convertendo a vírgula para ponto decimal americano"
+  if (cleanStr.includes(',') && cleanStr.includes('.')) {
+    const lastDot = cleanStr.lastIndexOf('.');
+    const lastComma = cleanStr.lastIndexOf(',');
+    if (lastComma > lastDot) {
+      // Formato brasileiro: ex. 1.234,56 ou 1.234.567,89
+      // Remove todos os pontos de milhar e substitui a vírgula por ponto decimal
+      cleanStr = cleanStr.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Formato com vírgula como milhar: ex. 1,234.56
+      cleanStr = cleanStr.replace(/,/g, '');
+    }
+  } else if (cleanStr.includes(',')) {
+    // Apenas vírgula: ex. "1234,56" ou "15,5"
+    const commaCount = (cleanStr.match(/,/g) || []).length;
+    if (commaCount === 1) {
+      // Substitui vírgula decimal por ponto decimal americano
+      cleanStr = cleanStr.replace(',', '.');
+    } else {
+      // Múltiplas vírgulas
+      cleanStr = cleanStr.replace(/,/g, '');
+    }
+  } else if (cleanStr.includes('.')) {
+    // Apenas ponto:
+    const dotCount = (cleanStr.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      // Múltiplos pontos no padrão brasileiro de milhar: ex. "1.234.567" -> 1234567
+      cleanStr = cleanStr.replace(/\./g, '');
+    }
+    // Caso com ponto único (ex: 1234.56 ou 15.5) já é decimal americano
+  }
+
+  const num = parseFloat(cleanStr);
+  if (isNaN(num)) return val;
+
+  return isNegative && num > 0 ? -num : num;
+}
+
 export function consolidateSheets(
   sheets: EsteiraSheet[],
   config: ConsolidationConfig,
@@ -292,6 +354,8 @@ export function consolidateSheets(
               processedVal = formatTimeValue(processedVal);
             } else if (mapping.dataType === 'currency') {
               processedVal = parseCurrencyValue(processedVal);
+            } else if (mapping.dataType === 'number') {
+              processedVal = parseNumericValue(processedVal);
             }
 
             if (typeof processedVal === 'string') {

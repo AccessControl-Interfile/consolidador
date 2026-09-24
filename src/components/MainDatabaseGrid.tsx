@@ -6,6 +6,7 @@ import {
   SlidersHorizontal, Layers, Merge, Save, BookmarkPlus, Edit, FolderOpen, RotateCcw, Replace, Database, UploadCloud, Filter, Search, RefreshCw, ListFilter
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exporter';
+import { parseNumericValue } from '../utils/consolidator';
 import { SupabaseModal } from './SupabaseModal';
 import { ClearSupabaseTableModal } from './ClearSupabaseTableModal';
 import { saveToFirebase, loadFromFirebase } from '../lib/firebase';
@@ -499,7 +500,18 @@ export const MainDatabaseGrid: React.FC<MainDatabaseGridProps> = ({
 
   const handleSaveEditCell = (rec: ConsolidatedRecord) => {
     if (!editingCell) return;
-    const finalVal = typeof cellValue === 'string' ? cellValue.toUpperCase() : cellValue;
+    const origVal = rec[editingCell.colName];
+    let finalVal: any = cellValue;
+    if (typeof origVal === 'number' || (typeof cellValue === 'string' && /^-?[\d.,\s]+$/.test(cellValue.trim()) && /\d/.test(cellValue))) {
+      const parsed = parseNumericValue(cellValue);
+      if (typeof parsed === 'number' && !isNaN(parsed)) {
+        finalVal = parsed;
+      } else {
+        finalVal = typeof cellValue === 'string' ? cellValue.toUpperCase() : cellValue;
+      }
+    } else {
+      finalVal = typeof cellValue === 'string' ? cellValue.toUpperCase() : cellValue;
+    }
     const updated = {
       ...rec,
       [editingCell.colName]: finalVal

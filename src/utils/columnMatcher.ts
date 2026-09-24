@@ -1,4 +1,5 @@
 import { DataType, EsteiraSheet, GroupedColumnMapping } from '../types';
+import { parseNumericValue } from './consolidator';
 
 interface SynonymGroup {
   targetName: string;
@@ -84,7 +85,16 @@ function inferDataTypeFromHeaderAndSample(header: string, sampleValues: any[]): 
   // Sample inspect
   const nonEmpties = sampleValues.filter(v => v !== null && v !== undefined && v !== '');
   if (nonEmpties.length > 0) {
-    const isNum = nonEmpties.every(v => typeof v === 'number' || (!isNaN(Number(v)) && String(v).trim() !== ''));
+    const isNum = nonEmpties.every(v => {
+      if (typeof v === 'number') return true;
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (!trimmed) return false;
+        const parsed = parseNumericValue(trimmed);
+        return typeof parsed === 'number' && !isNaN(parsed);
+      }
+      return false;
+    });
     if (isNum) return 'number';
   }
 

@@ -22,6 +22,34 @@ export const realtimeDb = getDatabase(firebaseApp);
 export const firestoreDb = getFirestore(firebaseApp);
 
 /**
+ * Cleans object to ensure compatibility with Firebase (removes undefined, functions, etc.)
+ */
+function sanitizeForFirebase(data: any): any {
+  if (data === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(data));
+  } catch (err) {
+    console.warn('Error sanitizing data for Firebase:', err);
+    return data;
+  }
+}
+
+/**
+ * Normalizes Firebase Realtime DB data (converts object with numeric keys to array if needed)
+ */
+function normalizeFirebaseData(data: any): any {
+  if (data === null || data === undefined) return data;
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    const keys = Object.keys(data);
+    const isArrayLike = keys.length > 0 && keys.every(k => !isNaN(Number(k)));
+    if (isArrayLike) {
+      return Object.values(data);
+    }
+  }
+  return data;
+}
+
+/**
  * Completely clears all legacy localStorage cache to enforce Firebase as single source of truth
  */
 export function purgeLocalStorage(): void {
@@ -40,8 +68,9 @@ export function purgeLocalStorage(): void {
  */
 export async function saveToFirebase<T = any>(key: string, value: T): Promise<boolean> {
   let success = false;
+  const cleanValue = sanitizeForFirebase(value);
   const payload = {
-    data: value,
+    data: cleanValue,
     updatedAt: new Date().toISOString()
   };
 
@@ -76,7 +105,8 @@ export async function loadFromFirebase<T = any>(key: string): Promise<T | null> 
     const snapshot = await get(dbRef);
     if (snapshot.exists()) {
       const val = snapshot.val();
-      return val?.data !== undefined ? val.data : val;
+      const rawData = val?.data !== undefined ? val.data : val;
+      return normalizeFirebaseData(rawData) as T;
     }
   } catch (err) {
     console.warn(`Realtime DB load failed for key (${key}):`, err);
@@ -88,7 +118,8 @@ export async function loadFromFirebase<T = any>(key: string): Promise<T | null> 
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const val = docSnap.data();
-      return (val?.data !== undefined ? val.data : val) as T;
+      const rawData = val?.data !== undefined ? val.data : val;
+      return normalizeFirebaseData(rawData) as T;
     }
   } catch (err) {
     console.warn(`Firestore load failed for key (${key}):`, err);
