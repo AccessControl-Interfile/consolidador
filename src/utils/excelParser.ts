@@ -23,11 +23,30 @@ export function parseExcelFile(arrayBuffer: ArrayBuffer, fileName: string): Este
       return;
     }
 
-    // Convert to JSON with header option
+    // Convert to JSON with formatted values (dates, strings) and raw values (true numbers)
     const rawJson: RawRow[] = XLSX.utils.sheet_to_json(sheet, {
       defval: '',
       raw: false,
       dateNF: 'yyyy-mm-dd'
+    });
+
+    const rawVals: RawRow[] = XLSX.utils.sheet_to_json(sheet, {
+      defval: '',
+      raw: true
+    });
+
+    // Merge: whenever a cell contains a valid number in the raw sheet, preserve the true numeric precision
+    rawJson.forEach((row, rIdx) => {
+      const rawRow = rawVals[rIdx];
+      if (rawRow) {
+        Object.keys(row).forEach(k => {
+          const rawV = rawRow[k];
+          if (typeof rawV === 'number' && !isNaN(rawV)) {
+            // Keep true numeric value (e.g. 0.94 or 1.03) instead of mask-truncated empty string or integer
+            row[k] = rawV;
+          }
+        });
+      }
     });
 
     if (rawJson.length === 0) {

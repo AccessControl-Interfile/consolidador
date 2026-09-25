@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { X, Database, CheckCircle2, AlertCircle, RefreshCw, UploadCloud, Table, Calendar, Trash2, Sparkles, Filter, Info } from 'lucide-react';
 import { SupabaseTable, SupabaseColumnMapping, ConsolidatedRecord } from '../types';
+import { parseNumericValue } from '../utils/consolidator';
 
 interface SupabaseModalProps {
   isOpen: boolean;
@@ -228,15 +229,38 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     }
   };
 
+  const fetchColumnsDirectly = async (tableName: string) => {
+    const cleanName = tableName.trim();
+    if (!cleanName || cleanName === 'custom') return;
+    try {
+      const { data, error } = await supabase.from(cleanName).select('*').limit(1);
+      if (!error && data && data.length > 0 && data[0]) {
+        const discovered = Object.keys(data[0]);
+        if (discovered.length > 0) {
+          setTableColumns(discovered);
+          const matchedDataCol = discovered.find(c => c.toLowerCase() === 'data') ||
+            discovered.find(c => c.toLowerCase().includes('data') || c.toLowerCase().includes('date') || c.toLowerCase().includes('dt_')) ||
+            'data';
+          setPeriodDateColumn(matchedDataCol);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const handleSelectTable = (tableName: string, tableList = tables) => {
     setSelectedTable(tableName);
     if (tableName === 'custom') {
       setTableColumns([]);
       setPeriodDateColumn('data');
+      if (customTableName.trim()) {
+        fetchColumnsDirectly(customTableName.trim());
+      }
       return;
     }
     const t = tableList.find(x => x.name === tableName);
-    if (t && t.columns) {
+    if (t && t.columns && t.columns.length > 0) {
       const colNames = t.columns.map(c => c.name);
       setTableColumns(colNames);
       
@@ -248,6 +272,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     } else {
       setTableColumns([]);
       setPeriodDateColumn('data');
+      fetchColumnsDirectly(tableName);
     }
   };
 
@@ -373,8 +398,14 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
               const isoDate = convertBRDateToISO(val);
               if (isoDate !== val) {
                 val = isoDate;
-              } else if (!isNaN(Number(val)) && !val.includes('/') && !val.includes('-')) {
-                val = Number(val);
+              } else if (!val.includes('/')) {
+                // Convert numeric string (with comma or period) to real American float/int
+                const parsedNum = parseNumericValue(val);
+                if (typeof parsedNum === 'number' && !isNaN(parsedNum)) {
+                  val = parsedNum;
+                } else if (!isNaN(Number(val)) && !val.includes('-')) {
+                  val = Number(val);
+                }
               }
             }
           }
@@ -393,6 +424,14 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
         const { error } = await supabase.from(activeTableName).insert(batch);
 
         if (error) {
+          if (error.code === '22P02' && (error.message.includes('bigint') || error.message.includes('integer'))) {
+            throw new Error(
+              `Erro no banco Supabase: Uma coluna na tabela "${activeTableName}" está configurada como Inteiro (bigint/integer) e rejeitou valores com casas decimais.\n` +
+              `Mensagem do banco: "${error.message}".\n\n` +
+              `👉 Para corrigir e permitir decimais como 0.94 ou 1.03, altere o tipo da coluna no Supabase para 'numeric' ou 'double precision', ou execute no SQL Editor do Supabase:\n` +
+              `ALTER TABLE ${activeTableName} ALTER COLUMN <nome_da_coluna> TYPE numeric USING <nome_da_coluna>::numeric;`
+            );
+          }
           throw new Error(`Erro no Supabase (Registros ${i + 1}-${Math.min(i + BATCH_SIZE, totalRows)}): ${error.message}`);
         }
 
@@ -480,7 +519,11 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
                     <input
                       type="text"
                       value={customTableName}
-                      onChange={(e) => setCustomTableName(e.target.value)}
+                      onChange={(e) => {
+                        setCustomTableName(e.target.value);
+                        fetchColumnsDirectly(e.target.value);
+                      }}
+                      onBlur={() => fetchColumnsDirectly(customTableName)}
                       placeholder="Nome exato da tabela no Supabase"
                       className="w-1/2 text-xs px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 font-mono bg-white shadow-sm"
                     />
@@ -493,7 +536,9 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
                   onChange={(e) => {
                     setCustomTableName(e.target.value);
                     setSelectedTable('custom');
+                    fetchColumnsDirectly(e.target.value);
                   }}
+                  onBlur={() => fetchColumnsDirectly(customTableName)}
                   placeholder="Nome exato da tabela no Supabase (ex: base_esteiras)"
                   className="w-full text-xs px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 font-mono bg-white shadow-sm"
                 />
