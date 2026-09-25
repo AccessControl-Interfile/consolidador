@@ -292,12 +292,24 @@ export function consolidateSheets(
 
   activeMappings.forEach(group => {
     group.sourceMappings.forEach(sm => {
-      const key = `${sm.sheetName}:::${sm.originalHeader}`;
-      headerLookup.set(key, {
+      const info = {
         targetColumnName: group.targetColumnName,
         dataType: group.dataType,
         isIgnored: sm.isIgnored
-      });
+      };
+      const sTrim = (sm.sheetName || '').trim();
+      const hTrim = (sm.originalHeader || '').trim();
+
+      // Exact match
+      headerLookup.set(`${sm.sheetName}:::${sm.originalHeader}`, info);
+      // Trimmed match
+      headerLookup.set(`${sTrim}:::${hTrim}`, info);
+      // Lowercase match
+      headerLookup.set(`${sTrim.toLowerCase()}:::${hTrim.toLowerCase()}`, info);
+      // Sheet-agnostic fallback by header name
+      if (!headerLookup.has(`*:::${hTrim.toLowerCase()}`)) {
+        headerLookup.set(`*:::${hTrim.toLowerCase()}`, info);
+      }
     });
   });
 
@@ -337,8 +349,13 @@ export function consolidateSheets(
 
       // Iterate through each header in original row
       Object.entries(row).forEach(([origHeader, origVal]) => {
-        const lookupKey = `${sheet.name}:::${origHeader}`;
-        const mapping = headerLookup.get(lookupKey);
+        const sTrim = (sheet.name || '').trim();
+        const hTrim = (origHeader || '').trim();
+        const mapping =
+          headerLookup.get(`${sheet.name}:::${origHeader}`) ||
+          headerLookup.get(`${sTrim}:::${hTrim}`) ||
+          headerLookup.get(`${sTrim.toLowerCase()}:::${hTrim.toLowerCase()}`) ||
+          headerLookup.get(`*:::${hTrim.toLowerCase()}`);
 
         if (mapping && !mapping.isIgnored) {
           let processedVal = origVal;
